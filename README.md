@@ -1,6 +1,6 @@
 <table style="width:100%" align="center" border="0">
   <tr align="center">
-    <td><img src="assets/pic.png" alt="Claude on OpenAI" width="300"></td>
+    <td><img src="assets/logo.png" alt="Claude on OpenAI" width="300"></td>
     <td><h1>🧩 Claude on OpenAI 🔄</h1></td>
   </tr>
 </table>
