@@ -9,6 +9,7 @@ import time
 import litellm
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
+from starlette.responses import HTMLResponse
 
 from src.models.schema import (
     MessagesRequest,
@@ -346,3 +347,177 @@ async def root():
     Root endpoint to verify the server is running
     """
     return {"message": "Anthropic Proxy for LiteLLM"}
+
+
+@router.get("/metrics", response_class=HTMLResponse)
+async def metrics_dashboard():
+    """Render a simple metrics dashboard for monitoring proxy performance"""
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Claude-OpenAI Proxy Metrics</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <script src="https://cdn.tailwindcss.com"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <style>
+            .metric-card {
+                @apply bg-white rounded-lg shadow p-4 hover:shadow-lg transition-shadow;
+            }
+            .metric-value {
+                @apply text-3xl font-bold text-blue-600;
+            }
+            .metric-label {
+                @apply text-gray-500 text-sm uppercase;
+            }
+        </style>
+    </head>
+    <body class="bg-gray-100 min-h-screen">
+        <div class="container mx-auto px-4 py-8">
+            <h1 class="text-2xl font-bold text-gray-800 mb-6">Claude-OpenAI Proxy Metrics</h1>
+
+            <div id="metrics-content" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                <!-- Metrics will be populated here -->
+                <div class="metric-card">
+                    <p class="metric-value" id="total-requests">...</p>
+                    <p class="metric-label">Total Requests</p>
+                </div>
+                <div class="metric-card">
+                    <p class="metric-value" id="success-rate">...</p>
+                    <p class="metric-label">Success Rate</p>
+                </div>
+                <div class="metric-card">
+                    <p class="metric-value" id="avg-latency">...</p>
+                    <p class="metric-label">Avg. Latency (ms)</p>
+                </div>
+                <div class="metric-card">
+                    <p class="metric-value" id="cache-hit-rate">...</p>
+                    <p class="metric-label">Cache Hit Rate</p>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h2 class="text-lg font-semibold mb-4">Requests per Minute</h2>
+                    <canvas id="requests-chart"></canvas>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h2 class="text-lg font-semibold mb-4">Response Time (ms)</h2>
+                    <canvas id="latency-chart"></canvas>
+                </div>
+            </div>
+
+            <div class="mt-8 bg-white rounded-lg shadow p-4">
+                <h2 class="text-lg font-semibold mb-4">Recent Requests</h2>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full table-auto">
+                        <thead>
+                            <tr class="bg-gray-100">
+                                <th class="px-4 py-2 text-left">Time</th>
+                                <th class="px-4 py-2 text-left">Source Model</th>
+                                <th class="px-4 py-2 text-left">Target Model</th>
+                                <th class="px-4 py-2 text-left">Status</th>
+                                <th class="px-4 py-2 text-left">Duration</th>
+                            </tr>
+                        </thead>
+                        <tbody id="requests-table">
+                            <!-- Request rows will be populated here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            // Fetch metrics data every 5 seconds
+            function fetchMetrics() {
+                fetch('/api/metrics-data')
+                    .then(response => response.json())
+                    .then(data => {
+                        document.getElementById('total-requests').textContent = data.total_requests;
+                        document.getElementById('success-rate').textContent = data.success_rate + '%';
+                        document.getElementById('avg-latency').textContent = data.avg_latency + 'ms';
+                        document.getElementById('cache-hit-rate').textContent = data.cache_hit_rate + '%';
+
+                        // Update charts
+                        updateCharts(data);
+
+                        // Update request table
+                        updateRequestTable(data.recent_requests);
+                    })
+                    .catch(error => console.error('Error fetching metrics:', error));
+            }
+
+            // Initialize and fetch initial data
+            fetchMetrics();
+            setInterval(fetchMetrics, 5000);
+
+            // Chart initialization code would go here
+            function updateCharts(data) {
+                // Implementation for updating charts with new data
+            }
+
+            function updateRequestTable(requests) {
+                const tableBody = document.getElementById('requests-table');
+                tableBody.innerHTML = '';
+
+                requests.forEach(req => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td class="border px-4 py-2">${req.timestamp}</td>
+                        <td class="border px-4 py-2">${req.source_model}</td>
+                        <td class="border px-4 py-2">${req.target_model}</td>
+                        <td class="border px-4 py-2">
+                            <span class="px-2 py-1 rounded ${req.status === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+                                ${req.status}
+                            </span>
+                        </td>
+                        <td class="border px-4 py-2">${req.duration}ms</td>
+                    `;
+                    tableBody.appendChild(row);
+                });
+            }
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+
+@router.get("/api/metrics-data")
+async def get_metrics_data():
+    """Return metrics data for the dashboard"""
+    # This would be implemented to return real metrics from your monitoring system
+    # For now, returning sample data
+    return {
+        "total_requests": 1258,
+        "success_rate": 99.2,
+        "avg_latency": 245,
+        "cache_hit_rate": 42.5,
+        "requests_per_minute": [12, 15, 10, 8, 14, 18, 22, 25, 20, 18],
+        "latency_over_time": [230, 245, 260, 220, 210, 240, 250, 270, 230, 220],
+        "recent_requests": [
+            {
+                "timestamp": "2023-06-14 15:42:33",
+                "source_model": "claude-3-sonnet",
+                "target_model": "gpt-4o",
+                "status": "success",
+                "duration": 245
+            },
+            {
+                "timestamp": "2023-06-14 15:41:58",
+                "source_model": "claude-3-haiku",
+                "target_model": "gpt-4o-mini",
+                "status": "success",
+                "duration": 134
+            },
+            {
+                "timestamp": "2023-06-14 15:41:22",
+                "source_model": "claude-3-sonnet",
+                "target_model": "gpt-4o",
+                "status": "error",
+                "duration": 320
+            }
+        ]
+    }
