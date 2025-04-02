@@ -6,6 +6,8 @@ import logging
 import uuid
 from typing import Dict, Any, Union
 
+from litellm.integrations.humanloop import prompt_manager
+
 from src.models.schema import (
     MessagesRequest,
     MessagesResponse,
@@ -600,3 +602,41 @@ async def handle_streaming(response_generator, original_request: MessagesRequest
         yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'error', 'stop_sequence': None}, 'usage': {'output_tokens': 0}})}\n\n"
         yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
         yield "data: [DONE]\n\n"
+
+
+async def enhance_request_with_templates(anthropic_request: MessagesRequest):
+    """Enhance the request with prompt templates"""
+    try:
+        # Check if system prompt exists and should be enhanced
+        if anthropic_request.system and isinstance(anthropic_request.system, str):
+            # Get enhancement context from user messages if available
+            context = {
+                "model": anthropic_request.model,
+                "max_tokens": anthropic_request.max_tokens,
+                "has_tools": bool(anthropic_request.tools)
+            }
+
+            # Extract user context from first message if possible
+            if anthropic_request.messages and len(anthropic_request.messages) > 0:
+                first_message = anthropic_request.messages[0]
+                if first_message.role == "user" and isinstance(first_message.content, str):
+                    context["user_query"] = first_message.content
+
+            # Enhance system prompt
+            enhanced_system = await prompt_manager.enhance_system_prompt(
+                anthropic_request.system,
+                context
+            )
+
+            # Replace system prompt
+            anthropic_request.system = enhanced_system
+
+            # Log template use
+            await prompt_manager.log_prompt_use(
+                "system_prompt_enhancer",
+                context
+            )
+    except Exception as e:
+        logger.warning(f"Failed to enhance request with templates: {e}")
+
+    return anthropic_request
