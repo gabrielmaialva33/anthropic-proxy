@@ -176,3 +176,23 @@ class MessagesResponse(BaseModel):
     stop_reason: Optional[Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]] = None
     stop_sequence: Optional[str] = None
     usage: Usage
+
+
+class LLMProvider(BaseModel):
+    """Configuration for an LLM provider"""
+    name: str
+    api_key_env: str
+    base_url: Optional[str] = None
+    default_model_mappings: Dict[str, str] = {}
+    retry_config: Optional[Dict[str, Any]] = None
+
+
+class ProxyConfig(BaseModel):
+    """Global configuration for the proxy"""
+    providers: List[LLMProvider]
+    default_provider: str
+    cache_enabled: bool = False
+    cache_ttl_seconds: int = 3600
+    max_retries: int = 3
+    timeout_seconds: int = 30
+    debug_mode: bool = False
