@@ -26,6 +26,7 @@
   <a href="#package-installation">Installation</a>&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
   <a href="#rocket-usage">Usage</a>&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
   <a href="#gear-how-it-works">How it Works</a>&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
+  <a href="#camera-screenshots">Screenshots</a>&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
   <a href="#memo-license">License</a>
 </p>
 
@@ -120,19 +121,58 @@ uvicorn src.app:app --host 0.0.0.0 --port 8082
 
 <br>
 
-### :shell: **Using with Claude Code**
+### :shell: **Installing & Using Claude Code**
 
-1. **Install Claude Code** (if not already installed):
+Claude Code is Anthropic's command-line tool that helps you with coding tasks. To use it with our proxy:
+
+1. **Install Node.js**:
+   Make sure you have Node.js installed (version 18 or higher). You can download it
+   from [nodejs.org](https://nodejs.org/).
+
+2. **Install Claude Code globally**:
    ```sh
    npm install -g @anthropic-ai/claude-code
    ```
 
-2. **Connect to your proxy**:
+3. **Verify installation**:
+   ```sh
+   claude --version
+   ```
+
+   This should display the version number if Claude Code is correctly installed.
+
+4. **Connect to your proxy**:
    ```sh
    ANTHROPIC_BASE_URL=http://localhost:8082 claude
    ```
 
-3. That's it! Your Claude Code client will now use OpenAI models through the proxy.
+5. **Start using Claude Code**:
+   ```sh
+   # For example, to start a new conversation:
+   claude "Write a Python function that counts words in a string"
+   
+   # Or to analyze a file:
+   claude analyze myfile.py
+   ```
+
+That's it! Your Claude Code client will now use OpenAI models through the proxy. You can use all Claude Code commands as
+normal, with the processing power of OpenAI models behind the scenes.
+
+### :wrench: **Troubleshooting Claude Code**
+
+If you encounter issues:
+
+- **Authentication errors**: Make sure your proxy is running and the `ANTHROPIC_BASE_URL` environment variable is set
+  correctly.
+
+- **"Command not found"**: Ensure Node.js is in your PATH and that Claude Code was installed globally with `-g` flag.
+
+- **Permission issues**: You might need to use `sudo` on Linux/Mac or run as Administrator on Windows.
+
+- **Connection refused**: Check that the proxy server is running on the expected port (8082 by default).
+
+For more information on Claude Code,
+visit [Anthropic's documentation](https://docs.anthropic.com/claude/docs/claude-code).
 
 <br>
 
@@ -148,6 +188,16 @@ This proxy operates by:
 
 The proxy handles both streaming and non-streaming responses, tool calls, system prompts, and multi-turn conversations
 to maintain compatibility with all Claude clients.
+
+<br>
+
+## :camera: Screenshots
+
+<p align="center">
+  <img src="assets/pic_screen.png" alt="Claude Code in action" width="800">
+  <br>
+  <em>Claude Code in action, running with OpenAI models through the proxy</em>
+</p>
 
 <br>
 
