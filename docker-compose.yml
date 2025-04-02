@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: claude-openai-proxy
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - BIG_MODEL=${BIG_MODEL:-gpt-4o}
+      - SMALL_MODEL=${SMALL_MODEL:-gpt-4o-mini}
+      - USE_OPENAI_MODELS=${USE_OPENAI_MODELS:-True}
+      - ENABLE_CACHE=${ENABLE_CACHE:-False}
+      - CACHE_TTL=${CACHE_TTL:-3600}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - REDIS_URL=redis://redis:6379/0
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8082/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  redis:
+    image: redis:alpine
+    container_name: claude-openai-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: claude-openai-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: claude-openai-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  prometheus-data:
+  grafana-data:
