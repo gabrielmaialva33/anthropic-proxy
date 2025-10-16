@@ -7,8 +7,6 @@ import os
 import time
 
 import litellm
-
-litellm.set_verbose = True
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from starlette.responses import HTMLResponse
