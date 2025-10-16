@@ -1,10 +1,9 @@
+import httpx
 import json
 import logging
 import os
 import time
 from typing import Dict, Any, Optional
-
-import httpx
 
 logger = logging.getLogger(__name__)
 

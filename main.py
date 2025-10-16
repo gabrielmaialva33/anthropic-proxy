@@ -1,19 +1,11 @@
 import os
 import sys
-
 import uvicorn
-from dotenv import load_dotenv
 
-# Load environment variables before importing app
-load_dotenv()
+from src.app.core.config import parse_environment_variables
 
-# Check that at least one API key is present
-anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-openai_key = os.environ.get("OPENAI_API_KEY")
-
-if not anthropic_key and not openai_key:
-    print("Error: At least one of ANTHROPIC_API_KEY or OPENAI_API_KEY must be provided")
-    print("Please set at least one of these variables in your .env file or environment.")
+# Load and validate environment variables
+if not parse_environment_variables():
     sys.exit(1)
 
 # Import app after environment variables are loaded
@@ -33,7 +25,7 @@ if __name__ == "__main__":
     print(f"Debug mode: {'enabled' if debug_mode else 'disabled'}")
 
     uvicorn.run(
-        "src.app:app",
+        "src.app.main:app",
         host="0.0.0.0",
         port=8082,
         log_level=log_level,

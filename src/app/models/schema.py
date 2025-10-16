@@ -2,9 +2,8 @@
 Data models for the API
 """
 import os
-from typing import List, Dict, Any, Optional, Union, Literal
-
 from pydantic import BaseModel, field_validator
+from typing import List, Dict, Any, Optional, Union, Literal
 
 # Flag to determine which model provider to use
 USE_OPENAI_MODELS = os.environ.get("USE_OPENAI_MODELS", "True").lower() in ["true", "1", "yes", "y"]
@@ -12,6 +11,42 @@ USE_OPENAI_MODELS = os.environ.get("USE_OPENAI_MODELS", "True").lower() in ["tru
 # Default model configurations
 BIG_MODEL = os.environ.get("BIG_MODEL", "gpt-4o")
 SMALL_MODEL = os.environ.get("SMALL_MODEL", "gpt-4o-mini")
+
+
+def _validate_model(v, info):
+    original_model = v
+
+    if USE_OPENAI_MODELS:
+        if v.startswith('anthropic/'):
+            v = v[10:]  # Remove 'anthropic/' prefix
+
+        if 'haiku' in v.lower():
+            new_model = f"openai/{SMALL_MODEL}"
+            print(f" MODEL MAPPING: {original_model} → {new_model}")
+            v = new_model
+        elif 'sonnet' in v.lower():
+            new_model = f"openai/{BIG_MODEL}"
+            print(f" MODEL MAPPING: {original_model} → {new_model}")
+            v = new_model
+        elif not v.startswith('openai/'):
+            new_model = f"openai/{v}"
+            print(f" MODEL MAPPING: {original_model} → {new_model}")
+            v = new_model
+
+        values = info.data
+        if isinstance(values, dict):
+            values['original_model'] = original_model
+        return v
+    else:
+        original_model = v
+        if not v.startswith('anthropic/'):
+            new_model = f"anthropic/{v}"
+            print(f" MODEL MAPPING: {original_model} → {new_model}")
+            values = info.data
+            if isinstance(values, dict):
+                values['original_model'] = original_model
+            return new_model
+        return v
 
 
 # Content block types
@@ -76,39 +111,7 @@ class MessagesRequest(BaseModel):
 
     @field_validator('model')
     def validate_model(cls, v, info):
-        original_model = v
-
-        if USE_OPENAI_MODELS:
-            if v.startswith('anthropic/'):
-                v = v[10:]  # Remove 'anthropic/' prefix
-
-            if 'haiku' in v.lower():
-                new_model = f"openai/{SMALL_MODEL}"
-                print(f" MODEL MAPPING: {original_model} → {new_model}")
-                v = new_model
-            elif 'sonnet' in v.lower():
-                new_model = f"openai/{BIG_MODEL}"
-                print(f" MODEL MAPPING: {original_model} → {new_model}")
-                v = new_model
-            elif not v.startswith('openai/'):
-                new_model = f"openai/{v}"
-                print(f" MODEL MAPPING: {original_model} → {new_model}")
-                v = new_model
-
-            values = info.data
-            if isinstance(values, dict):
-                values['original_model'] = original_model
-            return v
-        else:
-            original_model = v
-            if not v.startswith('anthropic/'):
-                new_model = f"anthropic/{v}"
-                print(f" MODEL MAPPING: {original_model} → {new_model}")
-                values = info.data
-                if isinstance(values, dict):
-                    values['original_model'] = original_model
-                return new_model
-            return v
+        return _validate_model(v, info)
 
 
 class TokenCountRequest(BaseModel):
@@ -122,38 +125,7 @@ class TokenCountRequest(BaseModel):
 
     @field_validator('model')
     def validate_model(cls, v, info):
-        original_model = v
-
-        if USE_OPENAI_MODELS:
-            if v.startswith('anthropic/'):
-                v = v[10:]
-
-            if 'haiku' in v.lower():
-                new_model = f"openai/{SMALL_MODEL}"
-                print(f" MODEL MAPPING: {original_model} → {new_model}")
-                v = new_model
-            elif 'sonnet' in v.lower():
-                new_model = f"openai/{BIG_MODEL}"
-                print(f" MODEL MAPPING: {original_model} → {new_model}")
-                v = new_model
-            elif not v.startswith('openai/'):
-                new_model = f"openai/{v}"
-                print(f" MODEL MAPPING: {original_model} → {new_model}")
-                v = new_model
-
-            values = info.data
-            if isinstance(values, dict):
-                values['original_model'] = original_model
-            return v
-        else:
-            if not v.startswith('anthropic/'):
-                new_model = f"anthropic/{v}"
-                print(f" MODEL MAPPING: {original_model} → {new_model}")
-                values = info.data
-                if isinstance(values, dict):
-                    values['original_model'] = original_model
-                return new_model
-            return v
+        return _validate_model(v, info)
 
 
 class TokenCountResponse(BaseModel):
@@ -196,3 +168,12 @@ class ProxyConfig(BaseModel):
     max_retries: int = 3
     timeout_seconds: int = 30
     debug_mode: bool = False
+
+
+class ChatCompletionRequest(BaseModel):
+    model: str
+    messages: List[Dict[str, Any]]
+    temperature: Optional[float] = 0.7
+    top_p: Optional[float] = 0.8
+    max_tokens: Optional[int] = 4096
+    stream: Optional[bool] = False

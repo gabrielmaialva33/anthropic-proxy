@@ -6,9 +6,7 @@ import logging
 import uuid
 from typing import Dict, Any, Union
 
-from litellm.integrations.humanloop import prompt_manager
-
-from src.models.schema import (
+from src.app.models.schema import (
     MessagesRequest,
     MessagesResponse,
     Usage, USE_OPENAI_MODELS
@@ -63,35 +61,30 @@ def parse_tool_result_content(content):
         return "Unparseable content"
 
 
-def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str, Any]:
-    """
-    Convert an Anthropic API request to a format compatible with LiteLLM
-    """
-    messages = []
+def _convert_system_prompt(system_prompt):
+    if not system_prompt:
+        return None
+    if isinstance(system_prompt, str):
+        return {"role": "system", "content": system_prompt}
+    elif isinstance(system_prompt, list):
+        system_text = ""
+        for block in system_prompt:
+            if hasattr(block, 'type') and block.type == "text":
+                system_text += block.text + "\n\n"
+            elif isinstance(block, dict) and block.get("type") == "text":
+                system_text += block.get("text", "") + "\n\n"
+        if system_text:
+            return {"role": "system", "content": system_text.strip()}
+    return None
 
-    # Handle system message
-    if anthropic_request.system:
-        if isinstance(anthropic_request.system, str):
-            messages.append({"role": "system", "content": anthropic_request.system})
-        elif isinstance(anthropic_request.system, list):
-            system_text = ""
-            for block in anthropic_request.system:
-                if hasattr(block, 'type') and block.type == "text":
-                    system_text += block.text + "\n\n"
-                elif isinstance(block, dict) and block.get("type") == "text":
-                    system_text += block.get("text", "") + "\n\n"
-            if system_text:
-                messages.append({"role": "system", "content": system_text.strip()})
 
-    # Handle user and assistant messages
-    for idx, msg in enumerate(anthropic_request.messages):
+def _convert_messages(messages):
+    litellm_messages = []
+    for idx, msg in enumerate(messages):
         content = msg.content
-
-        # Simple text content
         if isinstance(content, str):
-            messages.append({"role": msg.role, "content": content})
+            litellm_messages.append({"role": msg.role, "content": content})
         else:
-            # Complex content with blocks
             if msg.role == "user" and any(block.type == "tool_result" for block in content if hasattr(block, "type")):
                 text_content = ""
                 for block in content:
@@ -103,9 +96,8 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
                             result_content = parse_tool_result_content(
                                 block.content if hasattr(block, "content") else None)
                             text_content += f"Tool result for {tool_id}:\n{result_content}\n"
-                messages.append({"role": "user", "content": text_content.strip()})
+                litellm_messages.append({"role": "user", "content": text_content.strip()})
             else:
-                # Process content blocks
                 processed_content = []
                 for block in content:
                     if hasattr(block, "type"):
@@ -128,15 +120,68 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
                             processed_content_block["content"] = [{"type": "text", "text": parse_tool_result_content(
                                 block.content if hasattr(block, "content") else None)}]
                             processed_content.append(processed_content_block)
-                messages.append({"role": msg.role, "content": processed_content})
+                litellm_messages.append({"role": msg.role, "content": processed_content})
+    return litellm_messages
 
-    # Determine max tokens value
+
+def _convert_tools(tools):
+    if not tools:
+        return None
+    openai_tools = []
+    for tool in tools:
+        if hasattr(tool, 'dict'):
+            tool_dict = tool.dict()
+        else:
+            tool_dict = tool
+        openai_tool = {
+            "type": "function",
+            "function": {
+                "name": tool_dict["name"],
+                "description": tool_dict.get("description", ""),
+                "parameters": tool_dict["input_schema"]
+            }
+        }
+        openai_tools.append(openai_tool)
+    return openai_tools
+
+
+def _convert_tool_choice(tool_choice):
+    if not tool_choice:
+        return None
+    if hasattr(tool_choice, 'dict'):
+        tool_choice_dict = tool_choice.dict()
+    else:
+        tool_choice_dict = tool_choice
+    choice_type = tool_choice_dict.get("type")
+    if choice_type == "auto":
+        return "auto"
+    elif choice_type == "any":
+        return "any"
+    elif choice_type == "tool" and "name" in tool_choice_dict:
+        return {
+            "type": "function",
+            "function": {"name": tool_choice_dict["name"]}
+        }
+    else:
+        return "auto"
+
+
+def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str, Any]:
+    """
+    Convert an Anthropic API request to a format compatible with LiteLLM
+    """
+    messages = []
+    system_prompt = _convert_system_prompt(anthropic_request.system)
+    if system_prompt:
+        messages.append(system_prompt)
+
+    messages.extend(_convert_messages(anthropic_request.messages))
+
     max_tokens = anthropic_request.max_tokens
     if anthropic_request.model.startswith("openai/") or USE_OPENAI_MODELS:
         max_tokens = min(max_tokens, 16384)
         logger.debug(f"Capping max_tokens to 16384 for OpenAI model (original value: {anthropic_request.max_tokens})")
 
-    # Basic request parameters
     litellm_request = {
         "model": anthropic_request.model,
         "messages": messages,
@@ -145,7 +190,6 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
         "stream": anthropic_request.stream,
     }
 
-    # Add optional parameters if present
     if anthropic_request.stop_sequences:
         litellm_request["stop"] = anthropic_request.stop_sequences
     if anthropic_request.top_p:
@@ -153,43 +197,8 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
     if anthropic_request.top_k:
         litellm_request["top_k"] = anthropic_request.top_k
 
-    # Handle tools/functions
-    if anthropic_request.tools:
-        openai_tools = []
-        for tool in anthropic_request.tools:
-            if hasattr(tool, 'dict'):
-                tool_dict = tool.dict()
-            else:
-                tool_dict = tool
-            openai_tool = {
-                "type": "function",
-                "function": {
-                    "name": tool_dict["name"],
-                    "description": tool_dict.get("description", ""),
-                    "parameters": tool_dict["input_schema"]
-                }
-            }
-            openai_tools.append(openai_tool)
-        litellm_request["tools"] = openai_tools
-
-    # Handle tool choice
-    if anthropic_request.tool_choice:
-        if hasattr(anthropic_request.tool_choice, 'dict'):
-            tool_choice_dict = anthropic_request.tool_choice.dict()
-        else:
-            tool_choice_dict = anthropic_request.tool_choice
-        choice_type = tool_choice_dict.get("type")
-        if choice_type == "auto":
-            litellm_request["tool_choice"] = "auto"
-        elif choice_type == "any":
-            litellm_request["tool_choice"] = "any"
-        elif choice_type == "tool" and "name" in tool_choice_dict:
-            litellm_request["tool_choice"] = {
-                "type": "function",
-                "function": {"name": tool_choice_dict["name"]}
-            }
-        else:
-            litellm_request["tool_choice"] = "auto"
+    litellm_request["tools"] = _convert_tools(anthropic_request.tools)
+    litellm_request["tool_choice"] = _convert_tool_choice(anthropic_request.tool_choice)
 
     return litellm_request
 

@@ -1,12 +1,11 @@
 import argparse
 import asyncio
+import httpx
 import json
 import os
 import sys
 import time
 from datetime import datetime
-
-import httpx
 from dotenv import load_dotenv
 
 # Load environment variables

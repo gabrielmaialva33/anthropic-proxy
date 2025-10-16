@@ -1,11 +1,13 @@
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
+from starlette.responses import JSONResponse
 
-from src.api.routes import router
-from src.utils.logging import setup_logging
+from src.app.api.routes import router
+from src.app.utils.error_handler import format_exception
+from src.app.utils.logging import setup_logging
 
 # Load environment variables
 load_dotenv()
@@ -37,6 +39,40 @@ app = FastAPI(
     docs_url=None,  # Disable the default docs
     redoc_url=None,  # Disable the default redoc
 )
+
+
+# Add exception handlers
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    error_details = {
+        "error": {
+            "type": "http_exception",
+            "message": exc.detail,
+            "status_code": exc.status_code
+        }
+    }
+    logger.error(f"HTTP Exception: {error_details}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_details,
+    )
+
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    error_details = format_exception(exc)
+    logger.error(f"Unhandled Exception: {error_details}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "type": "unhandled_exception",
+                "message": "An unexpected error occurred.",
+                "details": error_details
+            }
+        },
+    )
+
 
 # Add CORS middleware if needed
 app.add_middleware(
