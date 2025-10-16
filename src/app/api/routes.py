@@ -77,7 +77,7 @@ async def create_message(
             )
         litellm_request["api_key"] = OPENAI_API_KEY
         logger.debug(f"Using OpenAI API key for model: {request.model}")
-    if preferred_provider == "nvidia":
+    elif preferred_provider == "nvidia":
         if "tools" in litellm_request:
             del litellm_request["tools"]
         if not NVIDIA_NIM_API_KEY:
@@ -216,8 +216,8 @@ async def create_message(
                 litellm_request["messages"][i]["content"] = "..."  # Fallback placeholder
 
     # Log model details
-    logger.debug(
-        f"Request for model: {litellm_request.get('model')}, stream: {litellm_request.get('stream', False)}")
+    logger.debug(f"Request for model: {litellm_request.get('model')}, stream: {litellm_request.get('stream', False)}")
+    print(litellm_request)
 
     # Count messages and tools for logging
     num_tools = len(request.tools) if request.tools else 0
@@ -236,7 +236,7 @@ async def create_message(
 
         headers = {"Authorization": f"Bearer {litellm_request.get('api_key')}"}
         api_key = litellm_request.pop("api_key", None)
-        response_generator = await litellm.acompletion(**litellm_request, api_key=api_key, headers=headers)
+        response_generator = await litellm.acompletion(**litellm_request, api_key=api_key, headers=headers, allowed_openai_params=["tools"])
 
         return StreamingResponse(
             handle_streaming(response_generator, request),
@@ -258,7 +258,7 @@ async def create_message(
         start_time = time.time()
         headers = {"Authorization": f"Bearer {litellm_request.get('api_key')}"}
         api_key = litellm_request.pop("api_key", None)
-        litellm_response = litellm.completion(**litellm_request, api_key=api_key, headers=headers)
+        litellm_response = litellm.completion(**litellm_request, api_key=api_key, headers=headers, allowed_openai_params=["tools"])
         logger.debug(
             f" RESPONSE RECEIVED: Model={litellm_request.get('model')}, Time={time.time() - start_time:.2f}s")
 
@@ -362,13 +362,13 @@ async def chat_completions(
     headers = {"Authorization": f"Bearer {litellm_request.get('api_key')}"}
     api_key = litellm_request.pop("api_key", None)
     if request.stream:
-        response_generator = await litellm.acompletion(**litellm_request, api_key=api_key, headers=headers)
+        response_generator = await litellm.acompletion(**litellm_request, api_key=api_key, headers=headers, allowed_openai_params=["tools"])
         return StreamingResponse(
             handle_openai_streaming(response_generator),
             media_type="text/event-stream"
         )
     else:
-        response = litellm.completion(**litellm_request, api_key=api_key, headers=headers)
+        response = litellm.completion(**litellm_request, api_key=api_key, headers=headers, allowed_openai_params=["tools"])
         return response
 
 
