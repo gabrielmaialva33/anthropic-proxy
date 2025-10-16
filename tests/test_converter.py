@@ -1,8 +1,9 @@
 import json
 import unittest
+from unittest.mock import patch, MagicMock
+
 from src.models.schema import MessagesRequest, Message, Tool
 from src.services.converter import convert_anthropic_to_litellm, convert_litellm_to_anthropic
-from unittest.mock import patch, MagicMock
 
 
 class TestConverter(unittest.TestCase):

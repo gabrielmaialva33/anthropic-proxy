@@ -1,9 +1,8 @@
 """
 Logging configuration for the application
 """
-import sys
-
 import logging
+import sys
 
 
 class MessageFilter(logging.Filter):

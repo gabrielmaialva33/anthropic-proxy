@@ -2,11 +2,11 @@
 Data models for the API
 """
 import os
-from pydantic import BaseModel, field_validator
 from typing import List, Dict, Any, Optional, Union, Literal
 
-# Flag to determine which model provider to use
-USE_OPENAI_MODELS = os.environ.get("USE_OPENAI_MODELS", "True").lower() in ["true", "1", "yes", "y"]
+from pydantic import BaseModel, field_validator
+
+PREFERRED_PROVIDER = os.environ.get("PREFERRED_PROVIDER", "openai").lower()
 
 # Default model configurations
 BIG_MODEL = os.environ.get("BIG_MODEL", "gpt-4o")
@@ -15,8 +15,22 @@ SMALL_MODEL = os.environ.get("SMALL_MODEL", "gpt-4o-mini")
 
 def _validate_model(v, info):
     original_model = v
+    preferred_provider = os.environ.get("PREFERRED_PROVIDER", "openai").lower()
 
-    if USE_OPENAI_MODELS:
+    if preferred_provider == "nvidia":
+        if 'haiku' in v.lower():
+            new_model = f"nvidia_nim/{SMALL_MODEL}"
+            print(f" MODEL MAPPING: {original_model} → {new_model}")
+            v = new_model
+        elif 'sonnet' in v.lower():
+            new_model = f"nvidia_nim/{BIG_MODEL}"
+            print(f" MODEL MAPPING: {original_model} → {new_model}")
+            v = new_model
+        elif not v.startswith('nvidia_nim/'):
+            new_model = f"nvidia_nim/{v}"
+            print(f" MODEL MAPPING: {original_model} → {new_model}")
+            v = new_model
+    elif preferred_provider == "openai":
         if v.startswith('anthropic/'):
             v = v[10:]  # Remove 'anthropic/' prefix
 
@@ -32,21 +46,16 @@ def _validate_model(v, info):
             new_model = f"openai/{v}"
             print(f" MODEL MAPPING: {original_model} → {new_model}")
             v = new_model
-
-        values = info.data
-        if isinstance(values, dict):
-            values['original_model'] = original_model
-        return v
-    else:
-        original_model = v
+    else:  # anthropic
         if not v.startswith('anthropic/'):
             new_model = f"anthropic/{v}"
             print(f" MODEL MAPPING: {original_model} → {new_model}")
-            values = info.data
-            if isinstance(values, dict):
-                values['original_model'] = original_model
-            return new_model
-        return v
+            v = new_model
+
+    values = info.data
+    if isinstance(values, dict):
+        values['original_model'] = original_model
+    return v
 
 
 # Content block types
@@ -90,7 +99,7 @@ class Tool(BaseModel):
 
 
 class ThinkingConfig(BaseModel):
-    enabled: bool
+    enabled: Optional[bool] = False
 
 
 class MessagesRequest(BaseModel):
@@ -177,3 +186,4 @@ class ChatCompletionRequest(BaseModel):
     top_p: Optional[float] = 0.8
     max_tokens: Optional[int] = 4096
     stream: Optional[bool] = False
+    extra_body: Optional[Dict[str, Any]] = None

@@ -2,10 +2,13 @@
 API routes for the application
 """
 import json
-import litellm
 import logging
 import os
 import time
+
+import litellm
+
+litellm.set_verbose = True
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from starlette.responses import HTMLResponse
@@ -22,7 +25,6 @@ from src.app.services.converter import (
     handle_streaming
 )
 from src.app.utils.helpers import log_request_beautifully
-from src.app.utils.error_handler import format_exception
 
 # Create router
 router = APIRouter()
@@ -30,6 +32,7 @@ router = APIRouter()
 # Get API keys from environment
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+NVIDIA_NIM_API_KEY = os.environ.get("NVIDIA_NIM_API_KEY")
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL")
 
 # Get logger
@@ -67,8 +70,8 @@ async def create_message(
     # Convert the request to LiteLLM format
     litellm_request = convert_anthropic_to_litellm(request)
 
-    # Set the appropriate API key based on the model provider
-    if request.model.startswith("openai/"):
+    preferred_provider = os.environ.get("PREFERRED_PROVIDER", "openai").lower()
+    if preferred_provider == "openai":
         if not OPENAI_API_KEY:
             raise HTTPException(
                 status_code=400,
@@ -76,7 +79,17 @@ async def create_message(
             )
         litellm_request["api_key"] = OPENAI_API_KEY
         logger.debug(f"Using OpenAI API key for model: {request.model}")
-    else:
+    if preferred_provider == "nvidia":
+        if "tools" in litellm_request:
+            del litellm_request["tools"]
+        if not NVIDIA_NIM_API_KEY:
+            raise HTTPException(
+                status_code=400,
+                detail="NVIDIA API key is required for NVIDIA models but was not provided"
+            )
+        litellm_request["api_key"] = NVIDIA_NIM_API_KEY
+        logger.debug(f"Using NVIDIA API key for model: {request.model}")
+    else:  # anthropic
         if not ANTHROPIC_API_KEY:
             raise HTTPException(
                 status_code=400,
@@ -223,7 +236,9 @@ async def create_message(
             200  # Assuming success at this point
         )
 
-        response_generator = await litellm.acompletion(**litellm_request)
+        headers = {"Authorization": f"Bearer {litellm_request.get('api_key')}"}
+        api_key = litellm_request.pop("api_key", None)
+        response_generator = await litellm.acompletion(**litellm_request, api_key=api_key, headers=headers)
 
         return StreamingResponse(
             handle_streaming(response_generator, request),
@@ -243,7 +258,9 @@ async def create_message(
         )
 
         start_time = time.time()
-        litellm_response = litellm.completion(**litellm_request)
+        headers = {"Authorization": f"Bearer {litellm_request.get('api_key')}"}
+        api_key = litellm_request.pop("api_key", None)
+        litellm_response = litellm.completion(**litellm_request, api_key=api_key, headers=headers)
         logger.debug(
             f" RESPONSE RECEIVED: Model={litellm_request.get('model')}, Time={time.time() - start_time:.2f}s")
 
@@ -336,19 +353,24 @@ async def chat_completions(
     """
     Main endpoint for handling OpenAI-compatible chat completions.
     """
-    litellm_request = request.dict()
+    litellm_request = request.dict(exclude_none=True)
+    if request.extra_body:
+        litellm_request.update(request.extra_body)
+
     litellm_request["api_key"] = OPENAI_API_KEY
     if OPENAI_BASE_URL:
         litellm_request["api_base"] = OPENAI_BASE_URL
 
+    headers = {"Authorization": f"Bearer {litellm_request.get('api_key')}"}
+    api_key = litellm_request.pop("api_key", None)
     if request.stream:
-        response_generator = await litellm.acompletion(**litellm_request)
+        response_generator = await litellm.acompletion(**litellm_request, api_key=api_key, headers=headers)
         return StreamingResponse(
             handle_openai_streaming(response_generator),
             media_type="text/event-stream"
         )
     else:
-        response = litellm.completion(**litellm_request)
+        response = litellm.completion(**litellm_request, api_key=api_key, headers=headers)
         return response
 
 

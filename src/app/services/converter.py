@@ -9,7 +9,7 @@ from typing import Dict, Any, Union
 from src.app.models.schema import (
     MessagesRequest,
     MessagesResponse,
-    Usage, USE_OPENAI_MODELS
+    Usage
 )
 
 logger = logging.getLogger(__name__)
@@ -178,7 +178,7 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
     messages.extend(_convert_messages(anthropic_request.messages))
 
     max_tokens = anthropic_request.max_tokens
-    if anthropic_request.model.startswith("openai/") or USE_OPENAI_MODELS:
+    if anthropic_request.model.startswith("openai/"):
         max_tokens = min(max_tokens, 16384)
         logger.debug(f"Capping max_tokens to 16384 for OpenAI model (original value: {anthropic_request.max_tokens})")
 

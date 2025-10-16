@@ -1,3 +1,3 @@
-from src.services.cache import ResponseCache
+from .cache import ResponseCache
 
 response_cache = ResponseCache()
