@@ -1,70 +1,233 @@
-"""
-Request converter for transforming Anthropic API requests to OpenAI format.
-
-This module handles the conversion of Anthropic API requests to a format
-compatible with the native OpenAI API.
-
-IMPORTANT: This converter NEVER filters tools based on model capabilities.
-Tools are always included in the request if provided. OpenAI handles tool
-support automatically.
-"""
 import json
 import logging
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List
+from venv import logger
 
-from src.app.models.schema import MessagesRequest
 from src.core.config import config
 from src.core.constants import Constants
+from src.models.claude import ClaudeMessagesRequest, ClaudeMessage
 
 logger = logging.getLogger(__name__)
 
 
-def convert_system_prompt(system_prompt) -> Optional[Dict[str, str]]:
-    """
-    Convert Anthropic system prompt to LiteLLM format.
+def convert_claude_to_openai(
+        claude_request: ClaudeMessagesRequest, model_manager
+) -> Dict[str, Any]:
+    """Convert Claude API request format to OpenAI format."""
 
-    Args:
-        system_prompt: System prompt (string or list of blocks)
+    # Map model
+    openai_model = model_manager.map_claude_model_to_openai(claude_request.model)
 
-    Returns:
-        System message dict or None
-    """
-    if not system_prompt:
-        return None
+    # Convert messages
+    openai_messages = []
 
-    if isinstance(system_prompt, str):
-        return {
-            "role": Constants.ROLE_SYSTEM,
-            "content": system_prompt
-        }
-    elif isinstance(system_prompt, list):
-        # Concatenate text blocks from system prompt
+    # Add system message if present
+    if claude_request.system:
         system_text = ""
-        for block in system_prompt:
-            if hasattr(block, 'type') and block.type == Constants.CONTENT_TEXT:
-                system_text += block.text + "\n\n"
-            elif isinstance(block, dict) and block.get("type") == Constants.CONTENT_TEXT:
-                system_text += block.get("text", "") + "\n\n"
+        if isinstance(claude_request.system, str):
+            system_text = claude_request.system
+        elif isinstance(claude_request.system, list):
+            text_parts = []
+            for block in claude_request.system:
+                if hasattr(block, "type") and block.type == Constants.CONTENT_TEXT:
+                    text_parts.append(block.text)
+                elif (
+                        isinstance(block, dict)
+                        and block.get("type") == Constants.CONTENT_TEXT
+                ):
+                    text_parts.append(block.get("text", ""))
+            system_text = "\n\n".join(text_parts)
 
-        if system_text:
-            return {
-                "role": Constants.ROLE_SYSTEM,
-                "content": system_text.strip()
+        if system_text.strip():
+            openai_messages.append(
+                {"role": Constants.ROLE_SYSTEM, "content": system_text.strip()}
+            )
+
+    # Process Claude messages
+    i = 0
+    while i < len(claude_request.messages):
+        msg = claude_request.messages[i]
+
+        if msg.role == Constants.ROLE_USER:
+            openai_message = convert_claude_user_message(msg)
+            openai_messages.append(openai_message)
+        elif msg.role == Constants.ROLE_ASSISTANT:
+            openai_message = convert_claude_assistant_message(msg)
+            openai_messages.append(openai_message)
+
+            # Check if next message contains tool results
+            if i + 1 < len(claude_request.messages):
+                next_msg = claude_request.messages[i + 1]
+                if (
+                        next_msg.role == Constants.ROLE_USER
+                        and isinstance(next_msg.content, list)
+                        and any(
+                    block.type == Constants.CONTENT_TOOL_RESULT
+                    for block in next_msg.content
+                    if hasattr(block, "type")
+                )
+                ):
+                    # Process tool results
+                    i += 1  # Skip to tool result message
+                    tool_results = convert_claude_tool_results(next_msg)
+                    openai_messages.extend(tool_results)
+
+        i += 1
+
+    # Build OpenAI request
+    openai_request = {
+        "model": openai_model,
+        "messages": openai_messages,
+        "max_tokens": min(
+            max(claude_request.max_tokens, config.min_tokens_limit),
+            config.max_tokens_limit,
+        ),
+        "temperature": claude_request.temperature,
+        "stream": claude_request.stream,
+    }
+    logger.debug(
+        f"Converted Claude request to OpenAI format: {json.dumps(openai_request, indent=2, ensure_ascii=False)}"
+    )
+    # Add optional parameters
+    if claude_request.stop_sequences:
+        openai_request["stop"] = claude_request.stop_sequences
+    if claude_request.top_p is not None:
+        openai_request["top_p"] = claude_request.top_p
+
+    # Convert tools
+    if claude_request.tools:
+        openai_tools = []
+        for tool in claude_request.tools:
+            if tool.name and tool.name.strip():
+                openai_tools.append(
+                    {
+                        "type": Constants.TOOL_FUNCTION,
+                        Constants.TOOL_FUNCTION: {
+                            "name": tool.name,
+                            "description": tool.description or "",
+                            "parameters": tool.input_schema,
+                        },
+                    }
+                )
+        if openai_tools:
+            openai_request["tools"] = openai_tools
+
+    # Convert tool choice
+    if claude_request.tool_choice:
+        choice_type = claude_request.tool_choice.get("type")
+        if choice_type == "auto":
+            openai_request["tool_choice"] = "auto"
+        elif choice_type == "any":
+            openai_request["tool_choice"] = "auto"
+        elif choice_type == "tool" and "name" in claude_request.tool_choice:
+            openai_request["tool_choice"] = {
+                "type": Constants.TOOL_FUNCTION,
+                Constants.TOOL_FUNCTION: {"name": claude_request.tool_choice["name"]},
             }
+        else:
+            openai_request["tool_choice"] = "auto"
 
-    return None
+    return openai_request
 
 
-def parse_tool_result_content(content) -> str:
-    """
-    Parse tool result content into a string representation.
+def convert_claude_user_message(msg: ClaudeMessage) -> Dict[str, Any]:
+    """Convert Claude user message to OpenAI format."""
+    if msg.content is None:
+        return {"role": Constants.ROLE_USER, "content": ""}
 
-    Args:
-        content: Tool result content (can be string, list, dict, or None)
+    if isinstance(msg.content, str):
+        return {"role": Constants.ROLE_USER, "content": msg.content}
 
-    Returns:
-        String representation of the content
-    """
+    # Handle multimodal content
+    openai_content = []
+    for block in msg.content:
+        if block.type == Constants.CONTENT_TEXT:
+            openai_content.append({"type": "text", "text": block.text})
+        elif block.type == Constants.CONTENT_IMAGE:
+            # Convert Claude image format to OpenAI format
+            if (
+                    isinstance(block.source, dict)
+                    and block.source.get("type") == "base64"
+                    and "media_type" in block.source
+                    and "data" in block.source
+            ):
+                openai_content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{block.source['media_type']};base64,{block.source['data']}"
+                        },
+                    }
+                )
+
+    if len(openai_content) == 1 and openai_content[0]["type"] == "text":
+        return {"role": Constants.ROLE_USER, "content": openai_content[0]["text"]}
+    else:
+        return {"role": Constants.ROLE_USER, "content": openai_content}
+
+
+def convert_claude_assistant_message(msg: ClaudeMessage) -> Dict[str, Any]:
+    """Convert Claude assistant message to OpenAI format."""
+    text_parts = []
+    tool_calls = []
+
+    if msg.content is None:
+        return {"role": Constants.ROLE_ASSISTANT, "content": None}
+
+    if isinstance(msg.content, str):
+        return {"role": Constants.ROLE_ASSISTANT, "content": msg.content}
+
+    for block in msg.content:
+        if block.type == Constants.CONTENT_TEXT:
+            text_parts.append(block.text)
+        elif block.type == Constants.CONTENT_TOOL_USE:
+            tool_calls.append(
+                {
+                    "id": block.id,
+                    "type": Constants.TOOL_FUNCTION,
+                    Constants.TOOL_FUNCTION: {
+                        "name": block.name,
+                        "arguments": json.dumps(block.input, ensure_ascii=False),
+                    },
+                }
+            )
+
+    openai_message = {"role": Constants.ROLE_ASSISTANT}
+
+    # Set content
+    if text_parts:
+        openai_message["content"] = "".join(text_parts)
+    else:
+        openai_message["content"] = None
+
+    # Set tool calls
+    if tool_calls:
+        openai_message["tool_calls"] = tool_calls
+
+    return openai_message
+
+
+def convert_claude_tool_results(msg: ClaudeMessage) -> List[Dict[str, Any]]:
+    """Convert Claude tool results to OpenAI format."""
+    tool_messages = []
+
+    if isinstance(msg.content, list):
+        for block in msg.content:
+            if block.type == Constants.CONTENT_TOOL_RESULT:
+                content = parse_tool_result_content(block.content)
+                tool_messages.append(
+                    {
+                        "role": Constants.ROLE_TOOL,
+                        "tool_call_id": block.tool_use_id,
+                        "content": content,
+                    }
+                )
+
+    return tool_messages
+
+
+def parse_tool_result_content(content):
+    """Parse and normalize tool result content into a string format."""
     if content is None:
         return "No content provided"
 
@@ -72,32 +235,27 @@ def parse_tool_result_content(content) -> str:
         return content
 
     if isinstance(content, list):
-        result = ""
+        result_parts = []
         for item in content:
             if isinstance(item, dict) and item.get("type") == Constants.CONTENT_TEXT:
-                result += item.get("text", "") + "\n"
+                result_parts.append(item.get("text", ""))
             elif isinstance(item, str):
-                result += item + "\n"
+                result_parts.append(item)
             elif isinstance(item, dict):
                 if "text" in item:
-                    result += item.get("text", "") + "\n"
+                    result_parts.append(item.get("text", ""))
                 else:
                     try:
-                        result += json.dumps(item) + "\n"
+                        result_parts.append(json.dumps(item, ensure_ascii=False))
                     except:
-                        result += str(item) + "\n"
-            else:
-                try:
-                    result += str(item) + "\n"
-                except:
-                    result += "Unparseable content\n"
-        return result.strip()
+                        result_parts.append(str(item))
+        return "\n".join(result_parts).strip()
 
     if isinstance(content, dict):
         if content.get("type") == Constants.CONTENT_TEXT:
             return content.get("text", "")
         try:
-            return json.dumps(content)
+            return json.dumps(content, ensure_ascii=False)
         except:
             return str(content)
 
@@ -105,241 +263,3 @@ def parse_tool_result_content(content) -> str:
         return str(content)
     except:
         return "Unparseable content"
-
-
-def convert_messages(messages) -> List[Dict[str, Any]]:
-    """
-    Convert Anthropic messages to LiteLLM format.
-
-    Args:
-        messages: List of Anthropic message objects
-
-    Returns:
-        List of LiteLLM-compatible message dicts
-    """
-    litellm_messages = []
-
-    for idx, msg in enumerate(messages):
-        content = msg.content
-
-        # Simple string content
-        if isinstance(content, str):
-            litellm_messages.append({
-                "role": msg.role,
-                "content": content
-            })
-            continue
-
-        # Complex content (list of blocks)
-        # Check if message contains tool results
-        has_tool_result = any(
-            hasattr(block, "type") and block.type == Constants.CONTENT_TOOL_RESULT
-            for block in content
-        )
-
-        if msg.role == Constants.ROLE_USER and has_tool_result:
-            # Flatten tool results to text for user messages
-            text_content = ""
-            for block in content:
-                if hasattr(block, "type"):
-                    if block.type == Constants.CONTENT_TEXT:
-                        text_content += block.text + "\n"
-                    elif block.type == Constants.CONTENT_TOOL_RESULT:
-                        tool_id = block.tool_use_id if hasattr(block, "tool_use_id") else ""
-                        result_content = parse_tool_result_content(
-                            block.content if hasattr(block, "content") else None
-                        )
-                        text_content += f"Tool result for {tool_id}:\n{result_content}\n"
-
-            litellm_messages.append({
-                "role": Constants.ROLE_USER,
-                "content": text_content.strip()
-            })
-        else:
-            # Process complex content blocks
-            processed_content = []
-            for block in content:
-                if hasattr(block, "type"):
-                    if block.type == Constants.CONTENT_TEXT:
-                        processed_content.append({
-                            "type": Constants.CONTENT_TEXT,
-                            "text": block.text
-                        })
-                    elif block.type == Constants.CONTENT_IMAGE:
-                        processed_content.append({
-                            "type": Constants.CONTENT_IMAGE,
-                            "source": block.source
-                        })
-                    elif block.type == Constants.CONTENT_TOOL_USE:
-                        processed_content.append({
-                            "type": Constants.CONTENT_TOOL_USE,
-                            "id": block.id,
-                            "name": block.name,
-                            "input": block.input
-                        })
-                    elif block.type == Constants.CONTENT_TOOL_RESULT:
-                        processed_content_block = {
-                            "type": Constants.CONTENT_TOOL_RESULT,
-                            "tool_use_id": block.tool_use_id if hasattr(block, "tool_use_id") else ""
-                        }
-                        processed_content_block["content"] = [{
-                            "type": Constants.CONTENT_TEXT,
-                            "text": parse_tool_result_content(
-                                block.content if hasattr(block, "content") else None
-                            )
-                        }]
-                        processed_content.append(processed_content_block)
-
-            litellm_messages.append({
-                "role": msg.role,
-                "content": processed_content
-            })
-
-    return litellm_messages
-
-
-def convert_tools(tools) -> Optional[List[Dict[str, Any]]]:
-    """
-    Convert Anthropic tools to OpenAI function format.
-
-    IMPORTANT: This function ALWAYS returns the tools if provided.
-    It does NOT filter based on model capabilities.
-
-    Args:
-        tools: List of Anthropic tool objects
-
-    Returns:
-        List of OpenAI-formatted tool dicts or None
-    """
-    if not tools:
-        return None
-
-    openai_tools = []
-    for tool in tools:
-        # Convert tool object to dict if needed
-        if hasattr(tool, 'dict'):
-            tool_dict = tool.dict()
-        else:
-            tool_dict = tool
-
-        # Build OpenAI function format
-        openai_tool = {
-            "type": Constants.TOOL_FUNCTION,
-            Constants.TOOL_FUNCTION: {
-                "name": tool_dict["name"],
-                "description": tool_dict.get("description", ""),
-                "parameters": tool_dict["input_schema"]
-            }
-        }
-        openai_tools.append(openai_tool)
-
-    logger.debug(f"Converted {len(openai_tools)} tools to OpenAI format")
-    return openai_tools
-
-
-def convert_tool_choice(tool_choice) -> Optional[Union[str, Dict[str, Any]]]:
-    """
-    Convert Anthropic tool_choice to OpenAI format.
-
-    Args:
-        tool_choice: Anthropic tool choice object
-
-    Returns:
-        OpenAI-formatted tool choice or None
-    """
-    if not tool_choice:
-        return None
-
-    # Convert to dict if needed
-    if hasattr(tool_choice, 'dict'):
-        tool_choice_dict = tool_choice.dict()
-    else:
-        tool_choice_dict = tool_choice
-
-    choice_type = tool_choice_dict.get("type")
-
-    if choice_type == Constants.TOOL_CHOICE_AUTO:
-        return Constants.TOOL_CHOICE_AUTO
-    elif choice_type == Constants.TOOL_CHOICE_ANY:
-        return Constants.TOOL_CHOICE_ANY
-    elif choice_type == Constants.TOOL_CHOICE_TOOL and "name" in tool_choice_dict:
-        # Specific tool choice
-        return {
-            "type": Constants.TOOL_FUNCTION,
-            Constants.TOOL_FUNCTION: {
-                "name": tool_choice_dict["name"]
-            }
-        }
-    else:
-        # Default to auto
-        return Constants.TOOL_CHOICE_AUTO
-
-
-def convert_anthropic_to_openai(anthropic_request: MessagesRequest) -> Dict[str, Any]:
-    """
-    Convert an Anthropic API request to OpenAI format.
-
-    IMPORTANT: This function ALWAYS includes tools in the request if provided.
-    It does NOT filter tools based on model capabilities. OpenAI handles tool
-    support automatically.
-
-    Args:
-        anthropic_request: Anthropic MessagesRequest object
-
-    Returns:
-        Dict containing OpenAI-compatible request
-    """
-    logger.debug(f"Converting Anthropic request for model: {anthropic_request.model}")
-
-    # Start with messages
-    messages = []
-
-    # Add system prompt as first message if present
-    system_prompt = convert_system_prompt(anthropic_request.system)
-    if system_prompt:
-        messages.append(system_prompt)
-
-    # Add converted messages
-    messages.extend(convert_messages(anthropic_request.messages))
-
-    # Handle max_tokens - cap to reasonable limit
-    max_tokens = min(anthropic_request.max_tokens, config.max_tokens_limit)
-    logger.debug(
-        f"Max tokens: {max_tokens} "
-        f"(original: {anthropic_request.max_tokens}, limit: {config.max_tokens_limit})"
-    )
-
-    # Build base OpenAI request
-    openai_request = {
-        "model": anthropic_request.model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": anthropic_request.temperature,
-        "stream": anthropic_request.stream,
-    }
-
-    # Add optional parameters
-    if anthropic_request.stop_sequences:
-        openai_request["stop"] = anthropic_request.stop_sequences
-    if anthropic_request.top_p is not None:
-        openai_request["top_p"] = anthropic_request.top_p
-    # Note: OpenAI doesn't support top_k, silently ignore
-
-    # CRITICAL: Always include tools if provided
-    # DO NOT filter based on model capabilities
-    converted_tools = convert_tools(anthropic_request.tools)
-    if converted_tools:
-        openai_request["tools"] = converted_tools
-        logger.debug(f"Added {len(converted_tools)} tools to request")
-
-    # Add tool_choice if provided
-    converted_tool_choice = convert_tool_choice(anthropic_request.tool_choice)
-    if converted_tool_choice:
-        openai_request["tool_choice"] = converted_tool_choice
-        logger.debug(f"Added tool_choice to request: {converted_tool_choice}")
-
-    logger.debug(f"Conversion complete. Model: {openai_request['model']}, "
-                 f"Messages: {len(openai_request['messages'])}, "
-                 f"Tools: {len(converted_tools) if converted_tools else 0}")
-
-    return openai_request

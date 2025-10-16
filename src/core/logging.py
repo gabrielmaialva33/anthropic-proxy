@@ -1,50 +1,21 @@
-"""
-Logging configuration for Anthropic-OpenAI proxy.
-
-This module sets up logging with appropriate formatters and handlers.
-"""
-
 import logging
-import sys
-from typing import Optional
+from src.core.config import config
 
+# Parse log level - extract just the first word to handle comments
+log_level = config.log_level.split()[0].upper()
 
-def setup_logging(log_level: Optional[str] = None):
-    """
-    Configure application logging.
+# Validate and set default if invalid
+valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+if log_level not in valid_levels:
+    log_level = 'INFO'
 
-    Args:
-        log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-    """
-    if log_level is None:
-        log_level = "INFO"
+# Logging Configuration
+logging.basicConfig(
+    level=getattr(logging, log_level),
+    format='%(asctime)s - %(levelname)s - %(message)s',
+)
+logger = logging.getLogger(__name__)
 
-    # Parse log level
-    numeric_level = getattr(logging, log_level.upper(), logging.INFO)
-
-    # Configure root logger
-    logging.basicConfig(
-        level=numeric_level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
-
-    # Set specific loggers to WARNING to reduce noise
-    logging.getLogger("uvicorn").setLevel(logging.WARNING)
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-    logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-
-
-def get_logger(name: str) -> logging.Logger:
-    """
-    Get a logger instance.
-
-    Args:
-        name: Logger name (usually __name__)
-
-    Returns:
-        Logger instance
-    """
-    return logging.getLogger(name)
+# Configure uvicorn to be quieter
+for uvicorn_logger in ["uvicorn", "uvicorn.access", "uvicorn.error"]:
+    logging.getLogger(uvicorn_logger).setLevel(logging.WARNING)
