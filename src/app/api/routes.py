@@ -78,8 +78,7 @@ async def create_message(
         litellm_request["api_key"] = OPENAI_API_KEY
         logger.debug(f"Using OpenAI API key for model: {request.model}")
     elif preferred_provider == "nvidia":
-        if "tools" in litellm_request:
-            del litellm_request["tools"]
+
         if not NVIDIA_NIM_API_KEY:
             raise HTTPException(
                 status_code=400,
