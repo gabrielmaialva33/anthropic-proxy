@@ -6,7 +6,8 @@
       "Bash(source .venv/bin/activate)",
       "Read(//Users/gabrielmaia/Documents/mcp/claude-code-proxy/**)",
       "Bash(lsof:*)",
-      "Bash(xargs kill:*)"
+      "Bash(xargs kill:*)",
+      "Bash(pip install:*)"
     ],
     "deny": [],
     "ask": []

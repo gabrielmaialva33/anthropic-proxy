@@ -1,22 +1,23 @@
 """
 API routes for Anthropic-OpenAI proxy.
 
-This module defines all API endpoints for the proxy server.
+This module defines all API endpoints for the proxy server using native OpenAI client.
 """
-import json
 import logging
-import time
+import uuid
+from typing import Optional
+from datetime import datetime
 
-import litellm
-from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Request, HTTPException, Header, Depends
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.responses import HTMLResponse
 
 from src.core.config import config
 from src.core.constants import Constants
-from src.conversion.request_converter import convert_anthropic_to_litellm
+from src.core.client import OpenAIClient
+from src.conversion.request_converter import convert_anthropic_to_openai
 from src.conversion.response_converter import (
-    convert_litellm_to_anthropic,
+    convert_openai_to_anthropic,
     handle_streaming
 )
 from src.app.models.schema import (
@@ -27,184 +28,193 @@ from src.app.models.schema import (
 )
 from src.app.utils.helpers import log_request_beautifully
 
-# Configure LiteLLM to automatically drop unsupported parameters
-litellm.drop_params = True
-
 # Create router
 router = APIRouter()
 
 # Get logger
 logger = logging.getLogger(__name__)
 
+# Get custom headers from config
+custom_headers = config.get_custom_headers()
 
-def get_provider_api_key(provider: str) -> str:
+# Initialize OpenAI client
+openai_client = OpenAIClient(
+    config.openai_api_key,
+    config.openai_base_url or "https://api.openai.com/v1",
+    config.request_timeout,
+    custom_headers=custom_headers,
+)
+
+logger.info(f"OpenAI client initialized with base URL: {config.openai_base_url or 'https://api.openai.com/v1'}")
+
+
+async def validate_api_key(
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None)
+):
     """
-    Get the API key for the specified provider.
+    Validate the client's API key from either x-api-key header or Authorization header.
 
     Args:
-        provider: Provider name (openai, anthropic, nvidia)
-
-    Returns:
-        API key for the provider
+        x_api_key: API key from x-api-key header
+        authorization: API key from Authorization header
 
     Raises:
-        HTTPException: If API key is not configured
+        HTTPException: If API key is invalid
     """
-    api_key = config.get_api_key_for_provider(provider)
-    if not api_key:
+    client_api_key = None
+
+    # Extract API key from headers
+    if x_api_key:
+        client_api_key = x_api_key
+    elif authorization and authorization.startswith("Bearer "):
+        client_api_key = authorization.replace("Bearer ", "")
+
+    # Skip validation if ANTHROPIC_API_KEY is not set in the environment
+    if not config.anthropic_api_key:
+        return
+
+    # Validate the client API key
+    if not client_api_key or client_api_key != config.anthropic_api_key:
+        logger.warning("Invalid API key provided by client")
         raise HTTPException(
-            status_code=400,
-            detail=f"{provider.upper()} API key is required for {provider} models but was not provided"
+            status_code=401,
+            detail="Invalid API key. Please provide a valid Anthropic API key."
         )
-    return api_key
 
 
 @router.post("/v1/messages")
 async def create_message(
     request: MessagesRequest,
-    raw_request: Request
+    http_request: Request,
+    _: None = Depends(validate_api_key)
 ):
     """
     Main endpoint for handling Anthropic Messages API requests.
 
-    Converts Anthropic API format to LiteLLM format, sends to provider,
+    Converts Anthropic API format to OpenAI format, sends to OpenAI API,
     and converts response back to Anthropic format.
     """
-    # Extract model information for logging
-    original_model = request.model
-    display_model = original_model.split("/")[-1] if "/" in original_model else original_model
-
-    # Log request details
-    logger.debug(f"Processing request: Model={request.model}, Stream={request.stream}")
-
-    # Convert Anthropic request to LiteLLM format
-    litellm_request = convert_anthropic_to_litellm(request)
-
-    # Get API key for the preferred provider
-    api_key = get_provider_api_key(config.preferred_provider)
-    litellm_request["api_key"] = api_key
-
-    # Add OpenAI base URL if configured
-    if config.preferred_provider == "openai" and config.openai_base_url:
-        litellm_request["api_base"] = config.openai_base_url
-        logger.debug(f"Using OpenAI base URL: {config.openai_base_url}")
-
-    # Log request summary
-    num_tools = len(request.tools) if request.tools else 0
-    logger.debug(
-        f"Request converted: Model={litellm_request.get('model')}, "
-        f"Messages={len(litellm_request['messages'])}, "
-        f"Tools={num_tools}, "
-        f"Stream={litellm_request.get('stream', False)}"
-    )
-
-    # IMPORTANT: Tools are ALWAYS included if present - no filtering
-    # The provider will handle tool support appropriately
-
-    # Count messages and tools for logging
-    log_request_beautifully(
-        "POST",
-        raw_request.url.path,
-        display_model,
-        litellm_request.get('model'),
-        len(litellm_request['messages']),
-        num_tools,
-        200
-    )
-
-    # Handle streaming responses
-    if request.stream:
-        headers = {"Authorization": f"Bearer {api_key}"}
-        api_key_param = litellm_request.pop("api_key", None)
-
-        # Call LiteLLM with allowed OpenAI parameters
-        response_generator = await litellm.acompletion(
-            **litellm_request,
-            api_key=api_key_param,
-            headers=headers,
-            allowed_openai_params=["tools"]
-        )
-
-        return StreamingResponse(
-            handle_streaming(response_generator, request),
-            media_type="text/event-stream"
-        )
-
-    # Handle non-streaming responses
-    else:
-        start_time = time.time()
-        headers = {"Authorization": f"Bearer {api_key}"}
-        api_key_param = litellm_request.pop("api_key", None)
-
-        # Call LiteLLM with allowed OpenAI parameters
-        litellm_response = litellm.completion(
-            **litellm_request,
-            api_key=api_key_param,
-            headers=headers,
-            allowed_openai_params=["tools"]
-        )
+    try:
+        # Extract model information for logging
+        display_model = request.model.split("/")[-1] if "/" in request.model else request.model
 
         logger.debug(
-            f"Response received: Model={litellm_request.get('model')}, "
-            f"Time={time.time() - start_time:.2f}s"
+            f"Processing Claude request: model={request.model}, stream={request.stream}"
         )
 
-        # Convert LiteLLM response to Anthropic format
-        anthropic_response = convert_litellm_to_anthropic(litellm_response, request)
+        # Generate unique request ID for cancellation tracking
+        request_id = str(uuid.uuid4())
 
-        return anthropic_response
+        # Convert Anthropic request to OpenAI format
+        openai_request = convert_anthropic_to_openai(request)
+
+        # Check if client disconnected before processing
+        if await http_request.is_disconnected():
+            raise HTTPException(status_code=499, detail="Client disconnected")
+
+        # Count tools for logging
+        num_tools = len(request.tools) if request.tools else 0
+
+        # Log request summary
+        log_request_beautifully(
+            "POST",
+            http_request.url.path,
+            display_model,
+            openai_request.get('model'),
+            len(openai_request['messages']),
+            num_tools,
+            200
+        )
+
+        if request.stream:
+            # Streaming response
+            try:
+                openai_stream = openai_client.create_chat_completion_stream(
+                    openai_request, request_id
+                )
+                return StreamingResponse(
+                    handle_streaming(
+                        openai_stream,
+                        request
+                    ),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Headers": "*",
+                    },
+                )
+            except HTTPException as e:
+                # Convert to proper error response for streaming
+                logger.error(f"Streaming error: {e.detail}")
+                error_response = {
+                    "type": "error",
+                    "error": {"type": "api_error", "message": e.detail},
+                }
+                return JSONResponse(status_code=e.status_code, content=error_response)
+        else:
+            # Non-streaming response
+            openai_response = await openai_client.create_chat_completion(
+                openai_request, request_id
+            )
+            anthropic_response = convert_openai_to_anthropic(
+                openai_response, request
+            )
+            return anthropic_response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logger.error(f"Unexpected error processing request: {e}")
+        logger.error(traceback.format_exc())
+        error_message = openai_client.classify_openai_error(str(e))
+        raise HTTPException(status_code=500, detail=error_message)
 
 
 @router.post("/v1/messages/count_tokens")
 async def count_tokens(
     request: TokenCountRequest,
-    raw_request: Request
+    _: None = Depends(validate_api_key)
 ):
     """
     Endpoint to count tokens for a request.
 
-    Uses LiteLLM's token counting functionality.
+    Uses simple character-based estimation (4 characters per token).
     """
-    # Extract model information
-    original_model = request.original_model or request.model
-    display_model = original_model.split("/")[-1] if "/" in original_model else original_model
+    try:
+        total_chars = 0
 
-    # Convert to LiteLLM request format for token counting
-    converted_request = convert_anthropic_to_litellm(
-        MessagesRequest(
-            model=request.model,
-            max_tokens=100,  # Arbitrary value not used for token counting
-            messages=request.messages,
-            system=request.system,
-            tools=request.tools,
-            tool_choice=request.tool_choice,
-            thinking=request.thinking
-        )
-    )
+        # Count system message characters
+        if request.system:
+            if isinstance(request.system, str):
+                total_chars += len(request.system)
+            elif isinstance(request.system, list):
+                for block in request.system:
+                    if hasattr(block, "text"):
+                        total_chars += len(block.text)
 
-    from litellm import token_counter
+        # Count message characters
+        for msg in request.messages:
+            if msg.content is None:
+                continue
+            elif isinstance(msg.content, str):
+                total_chars += len(msg.content)
+            elif isinstance(msg.content, list):
+                for block in msg.content:
+                    if hasattr(block, "text") and block.text is not None:
+                        total_chars += len(block.text)
 
-    # Count messages and tools for logging
-    num_tools = len(request.tools) if request.tools else 0
+        # Rough estimation: 4 characters per token
+        estimated_tokens = max(1, total_chars // 4)
 
-    # Log the request
-    log_request_beautifully(
-        "POST",
-        raw_request.url.path,
-        display_model,
-        converted_request.get('model'),
-        len(converted_request['messages']),
-        num_tools,
-        200
-    )
+        return TokenCountResponse(input_tokens=estimated_tokens)
 
-    # Count tokens
-    token_count = token_counter(
-        model=converted_request["model"],
-        messages=converted_request["messages"],
-    )
-
-    return TokenCountResponse(input_tokens=token_count)
+    except Exception as e:
+        logger.error(f"Error counting tokens: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/")
@@ -213,85 +223,138 @@ async def root():
     Root endpoint to verify the server is running.
     """
     return {
-        "message": "Anthropic-OpenAI Proxy",
-        "version": "2.0.0",
-        "preferred_provider": config.preferred_provider
+        "message": "Anthropic-OpenAI Proxy v2.0.0",
+        "status": "running",
+        "config": {
+            "openai_base_url": config.openai_base_url or "https://api.openai.com/v1",
+            "max_tokens_limit": config.max_tokens_limit,
+            "api_key_configured": bool(config.openai_api_key),
+            "client_api_key_validation": bool(config.anthropic_api_key),
+            "big_model": config.big_model,
+            "small_model": config.small_model,
+        },
+        "endpoints": {
+            "messages": "/v1/messages",
+            "count_tokens": "/v1/messages/count_tokens",
+            "health": "/health",
+            "test_connection": "/test-connection",
+        },
     }
+
+
+@router.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "openai_api_configured": bool(config.openai_api_key),
+        "client_api_key_validation": bool(config.anthropic_api_key),
+    }
+
+
+@router.get("/test-connection")
+async def test_connection():
+    """Test API connectivity to OpenAI"""
+    try:
+        # Simple test request to verify API connectivity
+        test_response = await openai_client.create_chat_completion(
+            {
+                "model": config.small_model,
+                "messages": [{"role": "user", "content": "Hello"}],
+                "max_tokens": 5,
+            }
+        )
+
+        return {
+            "status": "success",
+            "message": "Successfully connected to OpenAI API",
+            "model_used": config.small_model,
+            "timestamp": datetime.now().isoformat(),
+            "response_id": test_response.get("id", "unknown"),
+        }
+
+    except Exception as e:
+        logger.error(f"API connectivity test failed: {e}")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "failed",
+                "error_type": "API Error",
+                "message": str(e),
+                "timestamp": datetime.now().isoformat(),
+                "suggestions": [
+                    "Check your OPENAI_API_KEY is valid",
+                    "Verify your API key has the necessary permissions",
+                    "Check if you have reached rate limits",
+                ],
+            },
+        )
 
 
 async def handle_openai_streaming(response_generator):
     """
-    Handle streaming responses from LiteLLM in OpenAI format.
+    Handle streaming responses from OpenAI API in OpenAI format.
 
     Args:
-        response_generator: Async generator from LiteLLM
+        response_generator: Async generator from OpenAI
 
     Yields:
         OpenAI-formatted SSE chunks
     """
     async for chunk in response_generator:
-        yield f"data: {chunk.json()}\n\n"
-    yield "data: [DONE]\n\n"
+        yield f"{chunk}\n\n"
 
 
 @router.post("/v1/chat/completions")
 async def chat_completions(
     request: ChatCompletionRequest,
-    raw_request: Request
+    http_request: Request,
+    _: None = Depends(validate_api_key)
 ):
     """
     Endpoint for handling OpenAI-compatible chat completions.
 
     This endpoint accepts OpenAI format directly and passes it through
-    to LiteLLM without conversion.
+    to the OpenAI API without conversion.
     """
-    litellm_request = request.dict(exclude_none=True)
+    try:
+        openai_request = request.dict(exclude_none=True)
 
-    # Add extra_body parameters if present
-    if request.extra_body:
-        litellm_request.update(request.extra_body)
+        # Add extra_body parameters if present
+        if request.extra_body:
+            openai_request.update(request.extra_body)
 
-    # Get API key for the preferred provider
-    api_key = get_provider_api_key(config.preferred_provider)
-    litellm_request["api_key"] = api_key
-
-    # Add OpenAI base URL if configured
-    if config.openai_base_url:
-        litellm_request["api_base"] = config.openai_base_url
-
-    # IMPORTANT: Tools are ALWAYS included if present - no filtering
-    # The provider will handle tool support appropriately
-
-    logger.debug(
-        f"OpenAI chat completion: Model={litellm_request.get('model')}, "
-        f"Tools={len(litellm_request.get('tools', []))}"
-    )
-
-    headers = {"Authorization": f"Bearer {api_key}"}
-    api_key_param = litellm_request.pop("api_key", None)
-
-    # Handle streaming
-    if request.stream:
-        response_generator = await litellm.acompletion(
-            **litellm_request,
-            api_key=api_key_param,
-            headers=headers,
-            allowed_openai_params=["tools"]
-        )
-        return StreamingResponse(
-            handle_openai_streaming(response_generator),
-            media_type="text/event-stream"
+        logger.debug(
+            f"OpenAI chat completion: Model={openai_request.get('model')}, "
+            f"Tools={len(openai_request.get('tools', []))}"
         )
 
-    # Handle non-streaming
-    else:
-        response = litellm.completion(
-            **litellm_request,
-            api_key=api_key_param,
-            headers=headers,
-            allowed_openai_params=["tools"]
-        )
-        return response
+        # Generate request ID
+        request_id = str(uuid.uuid4())
+
+        # Handle streaming
+        if request.stream:
+            openai_stream = openai_client.create_chat_completion_stream(
+                openai_request, request_id
+            )
+            return StreamingResponse(
+                handle_openai_streaming(openai_stream),
+                media_type="text/event-stream"
+            )
+
+        # Handle non-streaming
+        else:
+            response = await openai_client.create_chat_completion(
+                openai_request, request_id
+            )
+            return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in chat completions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/metrics", response_class=HTMLResponse)
@@ -307,7 +370,6 @@ async def metrics_dashboard():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <script src="https://cdn.tailwindcss.com"></script>
-        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
             .metric-card {
                 @apply bg-white rounded-lg shadow p-4 hover:shadow-lg transition-shadow;
@@ -326,134 +388,50 @@ async def metrics_dashboard():
 
             <div id="metrics-content" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
                 <div class="metric-card">
-                    <p class="metric-value" id="total-requests">...</p>
+                    <p class="metric-value" id="total-requests">0</p>
                     <p class="metric-label">Total Requests</p>
                 </div>
                 <div class="metric-card">
-                    <p class="metric-value" id="success-rate">...</p>
+                    <p class="metric-value" id="success-rate">100%</p>
                     <p class="metric-label">Success Rate</p>
                 </div>
                 <div class="metric-card">
-                    <p class="metric-value" id="avg-latency">...</p>
+                    <p class="metric-value" id="avg-latency">-</p>
                     <p class="metric-label">Avg. Latency (ms)</p>
                 </div>
                 <div class="metric-card">
-                    <p class="metric-value" id="cache-hit-rate">...</p>
-                    <p class="metric-label">Cache Hit Rate</p>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div class="bg-white rounded-lg shadow p-4">
-                    <h2 class="text-lg font-semibold mb-4">Requests per Minute</h2>
-                    <canvas id="requests-chart"></canvas>
-                </div>
-                <div class="bg-white rounded-lg shadow p-4">
-                    <h2 class="text-lg font-semibold mb-4">Response Time (ms)</h2>
-                    <canvas id="latency-chart"></canvas>
+                    <p class="metric-value" id="provider">OpenAI</p>
+                    <p class="metric-label">Provider</p>
                 </div>
             </div>
 
             <div class="mt-8 bg-white rounded-lg shadow p-4">
-                <h2 class="text-lg font-semibold mb-4">Recent Requests</h2>
-                <div class="overflow-x-auto">
-                    <table class="min-w-full table-auto">
-                        <thead>
-                            <tr class="bg-gray-100">
-                                <th class="px-4 py-2 text-left">Time</th>
-                                <th class="px-4 py-2 text-left">Source Model</th>
-                                <th class="px-4 py-2 text-left">Target Model</th>
-                                <th class="px-4 py-2 text-left">Status</th>
-                                <th class="px-4 py-2 text-left">Duration</th>
-                            </tr>
-                        </thead>
-                        <tbody id="requests-table">
-                        </tbody>
-                    </table>
-                </div>
+                <h2 class="text-lg font-semibold mb-4">Configuration</h2>
+                <dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <dt class="text-sm text-gray-500">Base URL</dt>
+                        <dd class="text-sm font-medium">{{base_url}}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm text-gray-500">Big Model</dt>
+                        <dd class="text-sm font-medium">{{big_model}}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm text-gray-500">Small Model</dt>
+                        <dd class="text-sm font-medium">{{small_model}}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm text-gray-500">Max Tokens Limit</dt>
+                        <dd class="text-sm font-medium">{{max_tokens}}</dd>
+                    </div>
+                </dl>
             </div>
         </div>
-
-        <script>
-            function fetchMetrics() {
-                fetch('/api/metrics-data')
-                    .then(response => response.json())
-                    .then(data => {
-                        document.getElementById('total-requests').textContent = data.total_requests;
-                        document.getElementById('success-rate').textContent = data.success_rate + '%';
-                        document.getElementById('avg-latency').textContent = data.avg_latency + 'ms';
-                        document.getElementById('cache-hit-rate').textContent = data.cache_hit_rate + '%';
-                        updateRequestTable(data.recent_requests);
-                    })
-                    .catch(error => console.error('Error fetching metrics:', error));
-            }
-
-            fetchMetrics();
-            setInterval(fetchMetrics, 5000);
-
-            function updateRequestTable(requests) {
-                const tableBody = document.getElementById('requests-table');
-                tableBody.innerHTML = '';
-
-                requests.forEach(req => {
-                    const row = document.createElement('tr');
-                    row.innerHTML = `
-                        <td class="border px-4 py-2">${req.timestamp}</td>
-                        <td class="border px-4 py-2">${req.source_model}</td>
-                        <td class="border px-4 py-2">${req.target_model}</td>
-                        <td class="border px-4 py-2">
-                            <span class="px-2 py-1 rounded ${req.status === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
-                                ${req.status}
-                            </span>
-                        </td>
-                        <td class="border px-4 py-2">${req.duration}ms</td>
-                    `;
-                    tableBody.appendChild(row);
-                });
-            }
-        </script>
     </body>
     </html>
-    """
+    """.replace("{{base_url}}", config.openai_base_url or "https://api.openai.com/v1") \
+       .replace("{{big_model}}", config.big_model) \
+       .replace("{{small_model}}", config.small_model) \
+       .replace("{{max_tokens}}", str(config.max_tokens_limit))
+
     return HTMLResponse(content=html_content)
-
-
-@router.get("/api/metrics-data")
-async def get_metrics_data():
-    """
-    Return metrics data for the dashboard.
-
-    This would be implemented to return real metrics from a monitoring system.
-    For now, returns sample data.
-    """
-    return {
-        "total_requests": 1258,
-        "success_rate": 99.2,
-        "avg_latency": 245,
-        "cache_hit_rate": 42.5,
-        "requests_per_minute": [12, 15, 10, 8, 14, 18, 22, 25, 20, 18],
-        "latency_over_time": [230, 245, 260, 220, 210, 240, 250, 270, 230, 220],
-        "recent_requests": [
-            {
-                "timestamp": "2023-06-14 15:42:33",
-                "source_model": "claude-3-sonnet",
-                "target_model": config.big_model,
-                "status": "success",
-                "duration": 245
-            },
-            {
-                "timestamp": "2023-06-14 15:41:58",
-                "source_model": "claude-3-haiku",
-                "target_model": config.small_model,
-                "status": "success",
-                "duration": 134
-            },
-            {
-                "timestamp": "2023-06-14 15:41:22",
-                "source_model": "claude-3-sonnet",
-                "target_model": config.big_model,
-                "status": "error",
-                "duration": 320
-            }
-        ]
-    }

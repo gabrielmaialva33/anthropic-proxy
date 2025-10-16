@@ -1,9 +1,8 @@
 """
-Response converter for transforming LiteLLM responses to Anthropic API format.
+Response converter for transforming OpenAI responses to Anthropic API format.
 
-This module handles the conversion of LiteLLM responses (from various providers)
-back to Anthropic's expected response format, including both streaming and
-non-streaming responses.
+This module handles the conversion of OpenAI API responses back to Anthropic's
+expected response format, including both streaming and non-streaming responses.
 """
 import json
 import logging
@@ -36,27 +35,27 @@ def convert_stop_reason(finish_reason: str) -> str:
         return Constants.STOP_END_TURN
 
 
-def extract_response_data(litellm_response: Union[Dict[str, Any], Any]) -> Dict[str, Any]:
+def extract_response_data(openai_response: Union[Dict[str, Any], Any]) -> Dict[str, Any]:
     """
-    Extract response data from LiteLLM response object.
+    Extract response data from OpenAI response object.
 
     Handles both dict and object responses.
 
     Args:
-        litellm_response: LiteLLM response (dict or object)
+        openai_response: OpenAI response (dict or object)
 
     Returns:
         Dict containing extracted response data
     """
     # Try to extract from object attributes first
-    if hasattr(litellm_response, 'choices') and hasattr(litellm_response, 'usage'):
-        choices = litellm_response.choices
+    if hasattr(openai_response, 'choices') and hasattr(openai_response, 'usage'):
+        choices = openai_response.choices
         message = choices[0].message if choices and len(choices) > 0 else None
         content_text = message.content if message and hasattr(message, 'content') else ""
         tool_calls = message.tool_calls if message and hasattr(message, 'tool_calls') else None
         finish_reason = choices[0].finish_reason if choices and len(choices) > 0 else "stop"
-        usage_info = litellm_response.usage
-        response_id = getattr(litellm_response, 'id', f"msg_{uuid.uuid4()}")
+        usage_info = openai_response.usage
+        response_id = getattr(openai_response, 'id', f"msg_{uuid.uuid4()}")
 
         return {
             "content_text": content_text,
@@ -68,19 +67,19 @@ def extract_response_data(litellm_response: Union[Dict[str, Any], Any]) -> Dict[
 
     # Handle dictionary response
     try:
-        response_dict = litellm_response if isinstance(litellm_response, dict) else litellm_response.dict()
+        response_dict = openai_response if isinstance(openai_response, dict) else openai_response.dict()
     except AttributeError:
         try:
             response_dict = (
-                litellm_response.model_dump()
-                if hasattr(litellm_response, 'model_dump')
-                else litellm_response.__dict__
+                openai_response.model_dump()
+                if hasattr(openai_response, 'model_dump')
+                else openai_response.__dict__
             )
         except AttributeError:
             response_dict = {
-                "id": getattr(litellm_response, 'id', f"msg_{uuid.uuid4()}"),
-                "choices": getattr(litellm_response, 'choices', [{}]),
-                "usage": getattr(litellm_response, 'usage', {})
+                "id": getattr(openai_response, 'id', f"msg_{uuid.uuid4()}"),
+                "choices": getattr(openai_response, 'choices', [{}]),
+                "usage": getattr(openai_response, 'usage', {})
             }
 
     choices = response_dict.get("choices", [{}])
@@ -189,15 +188,15 @@ def convert_tool_calls_to_content(tool_calls, is_claude_model: bool) -> List[Dic
     return content
 
 
-def convert_litellm_to_anthropic(
-    litellm_response: Union[Dict[str, Any], Any],
+def convert_openai_to_anthropic(
+    openai_response: Union[Dict[str, Any], Any],
     original_request: MessagesRequest
 ) -> MessagesResponse:
     """
-    Convert a LiteLLM response to Anthropic API format.
+    Convert an OpenAI response to Anthropic API format.
 
     Args:
-        litellm_response: Response from LiteLLM
+        openai_response: Response from OpenAI API
         original_request: Original Anthropic request
 
     Returns:
@@ -215,7 +214,7 @@ def convert_litellm_to_anthropic(
         is_claude_model = clean_model.startswith("claude-")
 
         # Extract response data
-        response_data = extract_response_data(litellm_response)
+        response_data = extract_response_data(openai_response)
 
         # Build content blocks
         content = []
@@ -309,12 +308,12 @@ async def handle_streaming(
     original_request: MessagesRequest
 ) -> AsyncGenerator[str, None]:
     """
-    Handle streaming responses from LiteLLM and convert to Anthropic SSE format.
+    Handle streaming responses from OpenAI and convert to Anthropic SSE format.
 
-    Converts LiteLLM streaming chunks to Anthropic's Server-Sent Events format.
+    Converts OpenAI streaming chunks to Anthropic's Server-Sent Events format.
 
     Args:
-        response_generator: Async generator from LiteLLM
+        response_generator: Async generator from OpenAI API
         original_request: Original Anthropic request
 
     Yields:

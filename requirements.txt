@@ -1,8 +1,12 @@
-fastapi>=0.115.11
-uvicorn>=0.34.0
-httpx>=0.25.0
-pydantic>=2.0.0
-litellm>=1.40.14
-python-dotenv>=1.0.0
-pytest>=7.0.0
-pytest-asyncio>=0.21.0
+fastapi[standard]
+uvicorn
+pydantic
+python-dotenv
+openai
+# Dev dependencies
+pytest
+pytest-asyncio
+httpx
+black
+isort
+mypy
