@@ -11,6 +11,9 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from starlette.responses import HTMLResponse
 
+# Configure LiteLLM to automatically drop unsupported parameters
+litellm.drop_params = True
+
 from src.app.models.schema import (
     MessagesRequest,
     TokenCountRequest,
@@ -218,6 +221,18 @@ async def create_message(
     logger.debug(f"Request for model: {litellm_request.get('model')}, stream: {litellm_request.get('stream', False)}")
     print(litellm_request)
 
+    # Check if model supports function calling and remove tools if not supported
+    model_name = litellm_request.get('model')
+    if litellm_request.get('tools') is not None:
+        try:
+            supports_fc = litellm.supports_function_calling(model=model_name)
+            if not supports_fc:
+                logger.warning(f"Model {model_name} does not support function calling. Removing tools from request.")
+                litellm_request.pop('tools', None)
+                litellm_request.pop('tool_choice', None)
+        except Exception as e:
+            logger.warning(f"Could not check function calling support for {model_name}: {e}. Keeping tools in request.")
+
     # Count messages and tools for logging
     num_tools = len(request.tools) if request.tools else 0
 
@@ -357,6 +372,18 @@ async def chat_completions(
     litellm_request["api_key"] = OPENAI_API_KEY
     if OPENAI_BASE_URL:
         litellm_request["api_base"] = OPENAI_BASE_URL
+
+    # Check if model supports function calling and remove tools if not supported
+    model_name = litellm_request.get('model')
+    if litellm_request.get('tools') is not None:
+        try:
+            supports_fc = litellm.supports_function_calling(model=model_name)
+            if not supports_fc:
+                logger.warning(f"Model {model_name} does not support function calling. Removing tools from request.")
+                litellm_request.pop('tools', None)
+                litellm_request.pop('tool_choice', None)
+        except Exception as e:
+            logger.warning(f"Could not check function calling support for {model_name}: {e}. Keeping tools in request.")
 
     headers = {"Authorization": f"Bearer {litellm_request.get('api_key')}"}
     api_key = litellm_request.pop("api_key", None)

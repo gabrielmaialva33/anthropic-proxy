@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python main.py:*)",
+      "Bash(python3:*)",
+      "Bash(source .venv/bin/activate)",
+      "Read(//Users/gabrielmaia/Documents/mcp/claude-code-proxy/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

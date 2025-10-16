@@ -78,6 +78,12 @@ The proxy supports multiple providers configured via `PREFERRED_PROVIDER` env va
 - Claude models are mapped: `haiku` → `SMALL_MODEL`, `sonnet` → `BIG_MODEL`
 - Original model name is preserved in `original_model` field
 
+**Function calling support**:
+- The proxy automatically checks if a model supports function calling using `litellm.supports_function_calling()`
+- For models that don't support function calling (like some NVIDIA NIM models), `tools` and `tool_choice` parameters are automatically removed from requests
+- Configured with `litellm.drop_params = True` to automatically drop unsupported parameters
+- See routes.py:224-234 and routes.py:376-386 for implementation
+
 ### Core Components
 
 **`src/app/api/routes.py`**
@@ -190,6 +196,27 @@ The test suite (`tests/test_api.py`) covers:
 
 Run specific test categories with flags (`--simple`, `--tools-only`, `--no-streaming`).
 
+## NVIDIA NIM Integration
+
+The proxy fully supports NVIDIA NIM models. Key considerations:
+
+**Configuration**:
+- Set `PREFERRED_PROVIDER=nvidia` in `.env`
+- Provide `NVIDIA_NIM_API_KEY`
+- Models are automatically prefixed with `nvidia_nim/` (e.g., `nvidia_nim/meta/llama3-70b-instruct`)
+
+**Function calling limitations**:
+- Most NVIDIA NIM models don't support native function calling
+- The proxy automatically detects this using `litellm.supports_function_calling()`
+- When unsupported, `tools` parameters are stripped from requests
+- No errors are thrown - the proxy gracefully handles this
+
+**Recommended NVIDIA models**:
+- For large tasks: Set `BIG_MODEL=meta/llama3-70b-instruct` or `mistralai/mixtral-8x22b-instruct`
+- For small tasks: Set `SMALL_MODEL=meta/llama3-8b` or `microsoft/phi-3-mini-4k-instruct`
+
+See [LiteLLM NVIDIA NIM docs](https://docs.litellm.ai/docs/providers/nvidia_nim) for full model list.
+
 ## Important Notes
 
 - **Message content validation**: OpenAI models require string content, not arrays. The proxy automatically flattens complex content.
@@ -197,3 +224,4 @@ Run specific test categories with flags (`--simple`, `--tools-only`, `--no-strea
 - **API key routing**: The proxy selects the API key based on `PREFERRED_PROVIDER`, not the model name
 - **Tool call IDs**: Generated using UUID if not provided by the LLM
 - **Error handling**: All errors are converted to Anthropic format with proper `error` objects
+- **Function calling**: Automatically disabled for models that don't support it (no manual configuration needed)
