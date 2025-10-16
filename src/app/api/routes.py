@@ -22,6 +22,7 @@ from src.app.services.converter import (
     handle_streaming
 )
 from src.app.utils.helpers import log_request_beautifully
+from src.app.utils.error_handler import format_exception
 
 # Create router
 router = APIRouter()
@@ -29,6 +30,7 @@ router = APIRouter()
 # Get API keys from environment
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL")
 
 # Get logger
 logger = logging.getLogger(__name__)
@@ -336,6 +338,8 @@ async def chat_completions(
     """
     litellm_request = request.dict()
     litellm_request["api_key"] = OPENAI_API_KEY
+    if OPENAI_BASE_URL:
+        litellm_request["api_base"] = OPENAI_BASE_URL
 
     if request.stream:
         response_generator = await litellm.acompletion(**litellm_request)
