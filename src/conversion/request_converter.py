@@ -12,9 +12,9 @@ import json
 import logging
 from typing import Dict, Any, List, Optional, Union
 
-from src.core.constants import Constants
-from src.core.config import config
 from src.app.models.schema import MessagesRequest
+from src.core.config import config
+from src.core.constants import Constants
 
 logger = logging.getLogger(__name__)
 
@@ -339,7 +339,7 @@ def convert_anthropic_to_openai(anthropic_request: MessagesRequest) -> Dict[str,
         logger.debug(f"Added tool_choice to request: {converted_tool_choice}")
 
     logger.debug(f"Conversion complete. Model: {openai_request['model']}, "
-                f"Messages: {len(openai_request['messages'])}, "
-                f"Tools: {len(converted_tools) if converted_tools else 0}")
+                 f"Messages: {len(openai_request['messages'])}, "
+                 f"Tools: {len(converted_tools) if converted_tools else 0}")
 
     return openai_request

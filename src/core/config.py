@@ -4,9 +4,10 @@ Configuration management for Anthropic-OpenAI proxy.
 This module handles all environment variables and application configuration.
 """
 
-import os
 import logging
+import os
 from typing import Optional
+
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
@@ -53,11 +54,11 @@ class Config:
         """Validate configuration."""
         # Check that at least one API key is present
         if not any(
-            [
-                self.anthropic_api_key,
-                self.openai_api_key,
-                self.nvidia_nim_api_key,
-            ]
+                [
+                    self.anthropic_api_key,
+                    self.openai_api_key,
+                    self.nvidia_nim_api_key,
+                ]
         ):
             logger.error(
                 "Missing API keys: At least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, or NVIDIA_NIM_API_KEY must be provided"

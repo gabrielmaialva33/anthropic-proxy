@@ -5,21 +5,13 @@ This module defines all API endpoints for the proxy server using native OpenAI c
 """
 import logging
 import uuid
-from typing import Optional
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Request, HTTPException, Header, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.responses import HTMLResponse
 
-from src.core.config import config
-from src.core.constants import Constants
-from src.core.client import OpenAIClient
-from src.conversion.request_converter import convert_anthropic_to_openai
-from src.conversion.response_converter import (
-    convert_openai_to_anthropic,
-    handle_streaming
-)
 from src.app.models.schema import (
     MessagesRequest,
     TokenCountRequest,
@@ -27,6 +19,13 @@ from src.app.models.schema import (
     ChatCompletionRequest
 )
 from src.app.utils.helpers import log_request_beautifully
+from src.conversion.request_converter import convert_anthropic_to_openai
+from src.conversion.response_converter import (
+    convert_openai_to_anthropic,
+    handle_streaming
+)
+from src.core.client import OpenAIClient
+from src.core.config import config
 
 # Create router
 router = APIRouter()
@@ -49,8 +48,8 @@ logger.info(f"OpenAI client initialized with base URL: {config.openai_base_url o
 
 
 async def validate_api_key(
-    x_api_key: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None)
+        x_api_key: Optional[str] = Header(None),
+        authorization: Optional[str] = Header(None)
 ):
     """
     Validate the client's API key from either x-api-key header or Authorization header.
@@ -85,9 +84,9 @@ async def validate_api_key(
 
 @router.post("/v1/messages")
 async def create_message(
-    request: MessagesRequest,
-    http_request: Request,
-    _: None = Depends(validate_api_key)
+        request: MessagesRequest,
+        http_request: Request,
+        _: None = Depends(validate_api_key)
 ):
     """
     Main endpoint for handling Anthropic Messages API requests.
@@ -176,8 +175,8 @@ async def create_message(
 
 @router.post("/v1/messages/count_tokens")
 async def count_tokens(
-    request: TokenCountRequest,
-    _: None = Depends(validate_api_key)
+        request: TokenCountRequest,
+        _: None = Depends(validate_api_key)
 ):
     """
     Endpoint to count tokens for a request.
@@ -308,9 +307,9 @@ async def handle_openai_streaming(response_generator):
 
 @router.post("/v1/chat/completions")
 async def chat_completions(
-    request: ChatCompletionRequest,
-    http_request: Request,
-    _: None = Depends(validate_api_key)
+        request: ChatCompletionRequest,
+        http_request: Request,
+        _: None = Depends(validate_api_key)
 ):
     """
     Endpoint for handling OpenAI-compatible chat completions.
@@ -430,8 +429,8 @@ async def metrics_dashboard():
     </body>
     </html>
     """.replace("{{base_url}}", config.openai_base_url or "https://api.openai.com/v1") \
-       .replace("{{big_model}}", config.big_model) \
-       .replace("{{small_model}}", config.small_model) \
-       .replace("{{max_tokens}}", str(config.max_tokens_limit))
+        .replace("{{big_model}}", config.big_model) \
+        .replace("{{small_model}}", config.small_model) \
+        .replace("{{max_tokens}}", str(config.max_tokens_limit))
 
     return HTMLResponse(content=html_content)

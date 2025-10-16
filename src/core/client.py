@@ -14,7 +14,6 @@ from typing import Optional, AsyncGenerator, Dict, Any
 
 from fastapi import HTTPException
 from openai import AsyncOpenAI, AsyncAzureOpenAI
-from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai._exceptions import (
     APIError,
     RateLimitError,
@@ -29,12 +28,12 @@ class OpenAIClient:
     """Async OpenAI client with cancellation support and error handling."""
 
     def __init__(
-        self,
-        api_key: str,
-        base_url: str,
-        timeout: int = 90,
-        api_version: Optional[str] = None,
-        custom_headers: Optional[Dict[str, str]] = None
+            self,
+            api_key: str,
+            base_url: str,
+            timeout: int = 90,
+            api_version: Optional[str] = None,
+            custom_headers: Optional[Dict[str, str]] = None
     ):
         """
         Initialize OpenAI client.
@@ -82,9 +81,9 @@ class OpenAIClient:
         self.active_requests: Dict[str, asyncio.Event] = {}
 
     async def create_chat_completion(
-        self,
-        request: Dict[str, Any],
-        request_id: Optional[str] = None
+            self,
+            request: Dict[str, Any],
+            request_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Send chat completion to OpenAI API with cancellation support.
@@ -175,9 +174,9 @@ class OpenAIClient:
                 del self.active_requests[request_id]
 
     async def create_chat_completion_stream(
-        self,
-        request: Dict[str, Any],
-        request_id: Optional[str] = None
+            self,
+            request: Dict[str, Any],
+            request_id: Optional[str] = None
     ) -> AsyncGenerator[str, None]:
         """
         Send streaming chat completion to OpenAI API with cancellation support.
@@ -275,9 +274,9 @@ class OpenAIClient:
 
         # Region/country restrictions
         if "unsupported_country_region_territory" in error_str or \
-           "country, region, or territory not supported" in error_str:
+                "country, region, or territory not supported" in error_str:
             return ("OpenAI API is not available in your region. "
-                   "Consider using a VPN or Azure OpenAI service.")
+                    "Consider using a VPN or Azure OpenAI service.")
 
         # API key issues
         if "invalid_api_key" in error_str or "unauthorized" in error_str:
@@ -286,12 +285,12 @@ class OpenAIClient:
         # Rate limiting
         if "rate_limit" in error_str or "quota" in error_str:
             return ("Rate limit exceeded. Please wait and try again, "
-                   "or upgrade your API plan.")
+                    "or upgrade your API plan.")
 
         # Model not found
         if "model" in error_str and ("not found" in error_str or "does not exist" in error_str):
             return ("Model not found. Please check your BIG_MODEL and "
-                   "SMALL_MODEL configuration.")
+                    "SMALL_MODEL configuration.")
 
         # Billing issues
         if "billing" in error_str or "payment" in error_str:
@@ -300,7 +299,7 @@ class OpenAIClient:
         # Context length exceeded
         if "context_length_exceeded" in error_str or "maximum context length" in error_str:
             return ("Context length exceeded. Please reduce the size of your "
-                   "messages or max_tokens parameter.")
+                    "messages or max_tokens parameter.")
 
         # Default: return original message
         return str(error_detail)

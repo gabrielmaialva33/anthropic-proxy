@@ -9,8 +9,8 @@ import logging
 import uuid
 from typing import Dict, Any, List, Union, AsyncGenerator
 
-from src.core.constants import Constants
 from src.app.models.schema import MessagesRequest, MessagesResponse, Usage
+from src.core.constants import Constants
 
 logger = logging.getLogger(__name__)
 
@@ -189,8 +189,8 @@ def convert_tool_calls_to_content(tool_calls, is_claude_model: bool) -> List[Dic
 
 
 def convert_openai_to_anthropic(
-    openai_response: Union[Dict[str, Any], Any],
-    original_request: MessagesRequest
+        openai_response: Union[Dict[str, Any], Any],
+        original_request: MessagesRequest
 ) -> MessagesResponse:
     """
     Convert an OpenAI response to Anthropic API format.
@@ -278,8 +278,8 @@ def convert_openai_to_anthropic(
         )
 
         logger.debug(f"Converted response: id={anthropic_response.id}, "
-                    f"stop_reason={stop_reason}, "
-                    f"blocks={len(content)}")
+                     f"stop_reason={stop_reason}, "
+                     f"blocks={len(content)}")
 
         return anthropic_response
 
@@ -304,8 +304,8 @@ def convert_openai_to_anthropic(
 
 
 async def handle_streaming(
-    response_generator: AsyncGenerator,
-    original_request: MessagesRequest
+        response_generator: AsyncGenerator,
+        original_request: MessagesRequest
 ) -> AsyncGenerator[str, None]:
     """
     Handle streaming responses from OpenAI and convert to Anthropic SSE format.

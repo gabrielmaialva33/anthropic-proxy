@@ -4,9 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Claude on OpenAI** is a proxy server that translates between Anthropic's Claude API format and OpenAI's API format. It enables Claude Code and other Anthropic clients to use OpenAI models (like GPT-4o) by intercepting requests and converting them on the fly. The proxy uses LiteLLM as the translation layer.
+**Claude on OpenAI** is a proxy server that translates between Anthropic's Claude API format and OpenAI's API format. It
+enables Claude Code and other Anthropic clients to use OpenAI models (like GPT-4o) by intercepting requests and
+converting them on the fly. The proxy uses LiteLLM as the translation layer.
 
-**Key capability**: Allows Claude Code CLI to run with OpenAI models by setting `ANTHROPIC_BASE_URL=http://localhost:8082`.
+**Key capability**: Allows Claude Code CLI to run with OpenAI models by setting
+`ANTHROPIC_BASE_URL=http://localhost:8082`.
 
 ## Development Commands
 
@@ -69,24 +72,29 @@ pip install -r requirements.txt
 ### Provider System
 
 The proxy supports multiple providers configured via `PREFERRED_PROVIDER` env var:
+
 - `openai` (default): Routes to OpenAI models
 - `anthropic`: Routes to native Anthropic models
 - `nvidia`: Routes to NVIDIA NIM models
 
 **Model mapping logic** (in `src/app/models/schema.py`):
+
 - `_validate_model()` automatically prefixes models with provider (e.g., `openai/gpt-4o`)
 - Claude models are mapped: `haiku` → `SMALL_MODEL`, `sonnet` → `BIG_MODEL`
 - Original model name is preserved in `original_model` field
 
 **Function calling support**:
+
 - The proxy automatically checks if a model supports function calling using `litellm.supports_function_calling()`
-- For models that don't support function calling (like some NVIDIA NIM models), `tools` and `tool_choice` parameters are automatically removed from requests
+- For models that don't support function calling (like some NVIDIA NIM models), `tools` and `tool_choice` parameters are
+  automatically removed from requests
 - Configured with `litellm.drop_params = True` to automatically drop unsupported parameters
 - See routes.py:224-234 and routes.py:376-386 for implementation
 
 ### Core Components
 
 **`src/app/api/routes.py`**
+
 - `/v1/messages` - Main messages endpoint (Anthropic format)
 - `/v1/messages/count_tokens` - Token counting endpoint
 - `/v1/chat/completions` - OpenAI-compatible endpoint
@@ -95,6 +103,7 @@ The proxy supports multiple providers configured via `PREFERRED_PROVIDER` env va
 - Special handling for OpenAI models: flattens complex content structures (tool results, images) to plain text
 
 **`src/app/services/converter.py`**
+
 - `convert_anthropic_to_litellm()` - Request format conversion
 - `convert_litellm_to_anthropic()` - Response format conversion
 - `handle_streaming()` - Streaming response handler with SSE events
@@ -102,12 +111,14 @@ The proxy supports multiple providers configured via `PREFERRED_PROVIDER` env va
 - Complex streaming state machine manages content blocks and tool calls
 
 **`src/app/models/schema.py`**
+
 - Pydantic models for all request/response types
 - Model validation and provider prefixing
 - Content block types: text, image, tool_use, tool_result
 - Token count request/response models
 
 **`src/app/main.py`**
+
 - FastAPI app initialization
 - Exception handlers (HTTPException, generic Exception)
 - CORS middleware
@@ -116,6 +127,7 @@ The proxy supports multiple providers configured via `PREFERRED_PROVIDER` env va
 ### Streaming Implementation
 
 The streaming handler (`handle_streaming()`) follows Anthropic's SSE event format:
+
 1. `message_start` - Initial message metadata
 2. `content_block_start` - Start of text/tool block
 3. `ping` - Keepalive event
@@ -125,11 +137,13 @@ The streaming handler (`handle_streaming()`) follows Anthropic's SSE event forma
 7. `message_stop` - Stream completion
 8. `[DONE]` - Terminator
 
-**Critical detail**: Text blocks must be closed before tool blocks start. The handler manages state to ensure proper event ordering.
+**Critical detail**: Text blocks must be closed before tool blocks start. The handler manages state to ensure proper
+event ordering.
 
 ### OpenAI Model Compatibility
 
 For OpenAI models, the proxy performs special content flattening:
+
 - **Tool results**: Converted from structured blocks to plain text with `Tool Result:` prefix
 - **Complex content arrays**: Flattened to text strings
 - **Image blocks**: Replaced with placeholder text
@@ -140,18 +154,22 @@ This happens in routes.py lines 98-216.
 ### Environment Configuration
 
 Required keys (at least one):
+
 - `ANTHROPIC_API_KEY` - For Anthropic models
 - `OPENAI_API_KEY` - For OpenAI models
 - `NVIDIA_NIM_API_KEY` - For NVIDIA models (optional)
 
 Model mapping:
+
 - `BIG_MODEL` - Maps Sonnet models (default: `gpt-4o`)
 - `SMALL_MODEL` - Maps Haiku models (default: `gpt-4o-mini`)
 
 Provider selection:
+
 - `PREFERRED_PROVIDER` - `openai`, `anthropic`, or `nvidia` (default: `openai`)
 
 Server config:
+
 - `SERVER_HOST` - Default: `0.0.0.0`
 - `SERVER_PORT` - Default: `8082`
 - `LOG_LEVEL` - `debug`, `info`, `warning`, `error`, `critical`
@@ -169,6 +187,7 @@ Server config:
 ### Modifying Tool Call Handling
 
 Tool conversion happens in two places:
+
 1. **Request**: `converter.py` `_convert_tools()` and `_convert_tool_choice()`
 2. **Response**: `converter.py` lines 262-298 (non-streaming) and lines 476-553 (streaming)
 
@@ -177,11 +196,13 @@ Claude models receive native `tool_use` blocks. Non-Claude models get tool calls
 ### Debugging Streaming Issues
 
 Enable debug logging with `--debug` flag. The streaming handler logs:
+
 - Chunk processing at line 442
 - Tool call details at lines 263, 268, 291
 - Content block events throughout `handle_streaming()`
 
 Check that:
+
 - Text blocks are closed before tool blocks
 - `finish_reason` triggers completion events
 - Token usage is extracted from chunks
@@ -189,6 +210,7 @@ Check that:
 ### Testing API Compatibility
 
 The test suite (`tests/test_api.py`) covers:
+
 - Simple text completions
 - Tool calls (function calling)
 - Streaming responses
@@ -201,17 +223,20 @@ Run specific test categories with flags (`--simple`, `--tools-only`, `--no-strea
 The proxy fully supports NVIDIA NIM models. Key considerations:
 
 **Configuration**:
+
 - Set `PREFERRED_PROVIDER=nvidia` in `.env`
 - Provide `NVIDIA_NIM_API_KEY`
 - Models are automatically prefixed with `nvidia_nim/` (e.g., `nvidia_nim/meta/llama3-70b-instruct`)
 
 **Function calling limitations**:
+
 - Most NVIDIA NIM models don't support native function calling
 - The proxy automatically detects this using `litellm.supports_function_calling()`
 - When unsupported, `tools` parameters are stripped from requests
 - No errors are thrown - the proxy gracefully handles this
 
 **Recommended NVIDIA models**:
+
 - For large tasks: Set `BIG_MODEL=meta/llama3-70b-instruct` or `mistralai/mixtral-8x22b-instruct`
 - For small tasks: Set `SMALL_MODEL=meta/llama3-8b` or `microsoft/phi-3-mini-4k-instruct`
 
@@ -219,7 +244,8 @@ See [LiteLLM NVIDIA NIM docs](https://docs.litellm.ai/docs/providers/nvidia_nim)
 
 ## Important Notes
 
-- **Message content validation**: OpenAI models require string content, not arrays. The proxy automatically flattens complex content.
+- **Message content validation**: OpenAI models require string content, not arrays. The proxy automatically flattens
+  complex content.
 - **Token limits**: OpenAI models are capped at 16384 max_tokens (line 182 in converter.py)
 - **API key routing**: The proxy selects the API key based on `PREFERRED_PROVIDER`, not the model name
 - **Tool call IDs**: Generated using UUID if not provided by the LLM
