@@ -7,9 +7,9 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from starlette.responses import JSONResponse
 
-from src.app.api.routes import router
+from src.api.routes import router
 from src.app.utils.error_handler import format_exception
-from src.app.utils.logging import setup_logging
+from src.core.logging import setup_logging
 
 # Load environment variables
 load_dotenv()
@@ -20,25 +20,26 @@ logger = logging.getLogger(__name__)
 
 # Create FastAPI app
 app = FastAPI(
-    title="Claude-OpenAI Proxy",
+    title="Anthropic-OpenAI Proxy",
     description="""
-    A proxy service that enables seamless integration between Anthropic Claude and OpenAI APIs.
-    This service allows applications built for one API to be used with the other.
+    A multi-provider proxy service that routes Anthropic Claude API requests to various
+    LLM providers (OpenAI, Anthropic, NVIDIA NIM) using LiteLLM.
 
     ## Key Features
 
-    * Convert Anthropic Claude API requests to OpenAI format and vice versa
-    * Support for streaming responses
-    * Tool/function calling compatibility
-    * Proper error handling and conversion
-    * Transparent model mapping
+    * Multi-provider support (OpenAI, Anthropic, NVIDIA NIM)
+    * Convert Anthropic Claude API format to provider-specific formats
+    * Full streaming support with Server-Sent Events
+    * Tool/function calling support (always included, provider handles compatibility)
+    * Modular architecture with clean separation of concerns
+    * Comprehensive error handling and logging
 
     ## Usage
 
-    Replace your API endpoint with this proxy's endpoint and continue using your 
-    client application as before.
+    Configure your preferred provider via environment variables and use the
+    Anthropic Messages API format. The proxy handles all conversions automatically.
     """,
-    version="1.1.0",
+    version="2.0.0",
     docs_url=None,  # Disable the default docs
     redoc_url=None,  # Disable the default redoc
 )

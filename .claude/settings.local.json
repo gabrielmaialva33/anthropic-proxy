@@ -4,7 +4,9 @@
       "Bash(python main.py:*)",
       "Bash(python3:*)",
       "Bash(source .venv/bin/activate)",
-      "Read(//Users/gabrielmaia/Documents/mcp/claude-code-proxy/**)"
+      "Read(//Users/gabrielmaia/Documents/mcp/claude-code-proxy/**)",
+      "Bash(lsof:*)",
+      "Bash(xargs kill:*)"
     ],
     "deny": [],
     "ask": []
