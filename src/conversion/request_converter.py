@@ -1,7 +1,6 @@
 import json
 import logging
 from typing import Dict, Any, List
-from venv import logger
 
 from src.core.config import config
 from src.core.constants import Constants
@@ -11,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def convert_claude_to_openai(
-        claude_request: ClaudeMessagesRequest, model_manager
+    claude_request: ClaudeMessagesRequest, model_manager
 ) -> Dict[str, Any]:
     """Convert Claude API request format to OpenAI format."""
 
@@ -32,8 +31,8 @@ def convert_claude_to_openai(
                 if hasattr(block, "type") and block.type == Constants.CONTENT_TEXT:
                     text_parts.append(block.text)
                 elif (
-                        isinstance(block, dict)
-                        and block.get("type") == Constants.CONTENT_TEXT
+                    isinstance(block, dict)
+                    and block.get("type") == Constants.CONTENT_TEXT
                 ):
                     text_parts.append(block.get("text", ""))
             system_text = "\n\n".join(text_parts)
@@ -59,13 +58,13 @@ def convert_claude_to_openai(
             if i + 1 < len(claude_request.messages):
                 next_msg = claude_request.messages[i + 1]
                 if (
-                        next_msg.role == Constants.ROLE_USER
-                        and isinstance(next_msg.content, list)
-                        and any(
-                    block.type == Constants.CONTENT_TOOL_RESULT
-                    for block in next_msg.content
-                    if hasattr(block, "type")
-                )
+                    next_msg.role == Constants.ROLE_USER
+                    and isinstance(next_msg.content, list)
+                    and any(
+                        block.type == Constants.CONTENT_TOOL_RESULT
+                        for block in next_msg.content
+                        if hasattr(block, "type")
+                    )
                 ):
                     # Process tool results
                     i += 1  # Skip to tool result message
@@ -74,20 +73,32 @@ def convert_claude_to_openai(
 
         i += 1
 
-    # Build OpenAI request
+    # Sanitize messages — strip Claude-only fields that other providers reject
+    sanitized_messages = _sanitize_messages(openai_messages)
+
+    # Calculate token limit
+    token_limit = min(
+        max(claude_request.max_tokens, config.min_tokens_limit),
+        config.max_tokens_limit,
+    )
+
+    # Build OpenAI request with adaptive max_tokens param
     openai_request = {
         "model": openai_model,
-        "messages": openai_messages,
-        "max_tokens": min(
-            max(claude_request.max_tokens, config.min_tokens_limit),
-            config.max_tokens_limit,
-        ),
-        "temperature": claude_request.temperature,
+        "messages": sanitized_messages,
         "stream": claude_request.stream,
     }
-    logger.debug(
-        f"Converted Claude request to OpenAI format: {json.dumps(openai_request, indent=2, ensure_ascii=False)}"
-    )
+
+    # Reasoning models (o1, o3, o4) use max_completion_tokens, others use max_tokens
+    if config.is_reasoning_model(openai_model):
+        openai_request["max_completion_tokens"] = token_limit
+    else:
+        openai_request["max_tokens"] = token_limit
+        if claude_request.temperature is not None:
+            openai_request["temperature"] = claude_request.temperature
+
+    logger.debug(f"Converted request: model={openai_model}, tokens={token_limit}")
+
     # Add optional parameters
     if claude_request.stop_sequences:
         openai_request["stop"] = claude_request.stop_sequences
@@ -118,7 +129,7 @@ def convert_claude_to_openai(
         if choice_type == "auto":
             openai_request["tool_choice"] = "auto"
         elif choice_type == "any":
-            openai_request["tool_choice"] = "auto"
+            openai_request["tool_choice"] = "required"
         elif choice_type == "tool" and "name" in claude_request.tool_choice:
             openai_request["tool_choice"] = {
                 "type": Constants.TOOL_FUNCTION,
@@ -146,10 +157,10 @@ def convert_claude_user_message(msg: ClaudeMessage) -> Dict[str, Any]:
         elif block.type == Constants.CONTENT_IMAGE:
             # Convert Claude image format to OpenAI format
             if (
-                    isinstance(block.source, dict)
-                    and block.source.get("type") == "base64"
-                    and "media_type" in block.source
-                    and "data" in block.source
+                isinstance(block.source, dict)
+                and block.source.get("type") == "base64"
+                and "media_type" in block.source
+                and "data" in block.source
             ):
                 openai_content.append(
                     {
@@ -178,6 +189,9 @@ def convert_claude_assistant_message(msg: ClaudeMessage) -> Dict[str, Any]:
         return {"role": Constants.ROLE_ASSISTANT, "content": msg.content}
 
     for block in msg.content:
+        # Skip thinking/cache_control blocks — non-Claude providers reject them
+        if hasattr(block, "type") and block.type in Constants.CLAUDE_ONLY_FIELDS:
+            continue
         if block.type == Constants.CONTENT_TEXT:
             text_parts.append(block.text)
         elif block.type == Constants.CONTENT_TOOL_USE:
@@ -247,7 +261,7 @@ def parse_tool_result_content(content):
                 else:
                     try:
                         result_parts.append(json.dumps(item, ensure_ascii=False))
-                    except:
+                    except (TypeError, ValueError):
                         result_parts.append(str(item))
         return "\n".join(result_parts).strip()
 
@@ -256,10 +270,33 @@ def parse_tool_result_content(content):
             return content.get("text", "")
         try:
             return json.dumps(content, ensure_ascii=False)
-        except:
+        except (TypeError, ValueError):
             return str(content)
 
     try:
         return str(content)
-    except:
+    except (TypeError, ValueError):
         return "Unparseable content"
+
+
+def _sanitize_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Strip Claude-only fields from messages that non-Claude providers reject."""
+    sanitized = []
+    for msg in messages:
+        clean = dict(msg)
+        # Remove cache_control from content blocks
+        if isinstance(clean.get("content"), list):
+            clean["content"] = [
+                {
+                    k: v
+                    for k, v in block.items()
+                    if k not in Constants.CLAUDE_ONLY_FIELDS
+                }
+                for block in clean["content"]
+                if not (
+                    isinstance(block, dict)
+                    and block.get("type") in Constants.CLAUDE_ONLY_FIELDS
+                )
+            ]
+        sanitized.append(clean)
+    return sanitized
