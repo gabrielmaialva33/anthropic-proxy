@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+import tiktoken
 from fastapi import APIRouter, HTTPException, Request, Header, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -15,6 +16,12 @@ from src.core.config import config
 from src.core.logging import logger
 from src.core.model_manager import model_manager
 from src.models.claude import ClaudeMessagesRequest, ClaudeTokenCountRequest
+
+# Pre-load tokenizer (cl100k_base covers gpt-4o, gpt-4, gpt-3.5-turbo)
+try:
+    _tokenizer = tiktoken.get_encoding("cl100k_base")
+except Exception:
+    _tokenizer = None
 
 router = APIRouter()
 
@@ -30,7 +37,9 @@ openai_client = OpenAIClient(
 )
 
 
-async def validate_api_key(x_api_key: Optional[str] = Header(None), authorization: Optional[str] = Header(None)):
+async def validate_api_key(
+    x_api_key: Optional[str] = Header(None), authorization: Optional[str] = Header(None)
+):
     """Validate the client's API key from either x-api-key header or Authorization header."""
     client_api_key = None
 
@@ -46,15 +55,19 @@ async def validate_api_key(x_api_key: Optional[str] = Header(None), authorizatio
 
     # Validate the client API key
     if not client_api_key or not config.validate_client_api_key(client_api_key):
-        logger.warning(f"Invalid API key provided by client")
+        logger.warning("Invalid API key provided by client")
         raise HTTPException(
             status_code=401,
-            detail="Invalid API key. Please provide a valid Anthropic API key."
+            detail="Invalid API key. Please provide a valid Anthropic API key.",
         )
 
 
 @router.post("/v1/messages")
-async def create_message(request: ClaudeMessagesRequest, http_request: Request, _: None = Depends(validate_api_key)):
+async def create_message(
+    request: ClaudeMessagesRequest,
+    http_request: Request,
+    _: None = Depends(validate_api_key),
+):
     try:
         logger.debug(
             f"Processing Claude request: model={request.model}, stream={request.stream}"
@@ -126,37 +139,41 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
 
 
 @router.post("/v1/messages/count_tokens")
-async def count_tokens(request: ClaudeTokenCountRequest, _: None = Depends(validate_api_key)):
+async def count_tokens(
+    request: ClaudeTokenCountRequest, _: None = Depends(validate_api_key)
+):
     try:
-        # For token counting, we'll use a simple estimation
-        # In a real implementation, you might want to use tiktoken or similar
+        total_text = []
 
-        total_chars = 0
-
-        # Count system message characters
+        # Collect system message text
         if request.system:
             if isinstance(request.system, str):
-                total_chars += len(request.system)
+                total_text.append(request.system)
             elif isinstance(request.system, list):
                 for block in request.system:
                     if hasattr(block, "text"):
-                        total_chars += len(block.text)
+                        total_text.append(block.text)
 
-        # Count message characters
+        # Collect message text
         for msg in request.messages:
             if msg.content is None:
                 continue
             elif isinstance(msg.content, str):
-                total_chars += len(msg.content)
+                total_text.append(msg.content)
             elif isinstance(msg.content, list):
                 for block in msg.content:
                     if hasattr(block, "text") and block.text is not None:
-                        total_chars += len(block.text)
+                        total_text.append(block.text)
 
-        # Rough estimation: 4 characters per token
-        estimated_tokens = max(1, total_chars // 4)
+        combined = "\n".join(total_text)
 
-        return {"input_tokens": estimated_tokens}
+        # Use tiktoken for accurate counting, fallback to estimation
+        if _tokenizer:
+            estimated_tokens = len(_tokenizer.encode(combined))
+        else:
+            estimated_tokens = max(1, len(combined) // 4)
+
+        return {"input_tokens": max(1, estimated_tokens)}
 
     except Exception as e:
         logger.error(f"Error counting tokens: {e}")
@@ -218,7 +235,7 @@ async def test_connection():
 async def root():
     """Root endpoint"""
     return {
-        "message": "Claude-to-OpenAI API Proxy v1.0.0",
+        "message": "Claude-to-OpenAI API Proxy v2.0.0",
         "status": "running",
         "config": {
             "openai_base_url": config.openai_base_url,

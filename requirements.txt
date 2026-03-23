@@ -3,6 +3,7 @@ uvicorn
 pydantic
 python-dotenv
 openai
+tiktoken
 # Dev dependencies
 pytest
 pytest-asyncio
