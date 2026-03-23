@@ -166,22 +166,109 @@ That's it! Claude Code will use your configured model through the proxy.
 
 ## :gear: How it Works
 
-```
-Claude Code ──► Anthropic format ──► Proxy ──► OpenAI format ──► Provider
-                                       │
-                                       ├── Convert request (tools, messages, system)
-                                       ├── Map model (haiku→small, sonnet→middle, opus→big)
-                                       ├── Sanitize input (strip thinking/cache_control)
-                                       ├── Adapt params (max_tokens vs max_completion_tokens)
-                                       │
-Provider ──► OpenAI format ──► Proxy ──► Anthropic format ──► Claude Code
-                                 │
-                                 ├── Convert response (tool_calls → tool_use blocks)
-                                 ├── Convert reasoning → thinking blocks
-                                 └── Stream SSE events (message_start → deltas → message_stop)
+### Request Flow
+
+```mermaid
+sequenceDiagram
+    participant CC as 🖥️ Claude Code
+    participant P as 🔄 Proxy
+    participant API as ☁️ Provider API
+
+    CC->>P: POST /v1/messages (Anthropic format)
+
+    Note over P: 🔑 Validate API key
+    Note over P: 🗺️ Map model (haiku→small, sonnet→middle, opus→big)
+    Note over P: 🧹 Sanitize input (strip thinking/cache_control)
+    Note over P: ⚙️ Adapt params (max_tokens vs max_completion_tokens)
+    Note over P: 🔧 Convert tools (Claude → OpenAI function calling)
+
+    P->>API: POST /chat/completions (OpenAI format)
+    API-->>P: Response or SSE Stream
+
+    Note over P: 🔄 Convert response (tool_calls → tool_use blocks)
+    Note over P: 🧠 Convert reasoning → thinking blocks
+    Note over P: 📡 Stream SSE events
+
+    P-->>CC: SSE Stream (Anthropic format)
 ```
 
-The proxy handles both streaming and non-streaming responses, tool calls, system prompts, multi-turn conversations,
+### Architecture Overview
+
+```mermaid
+graph TB
+    subgraph Clients
+        CC[Claude Code CLI]
+        AC[Anthropic SDK Clients]
+    end
+
+    subgraph "Proxy (FastAPI)"
+        EP[endpoints.py<br/>API Routes & Auth]
+        RC[request_converter.py<br/>Claude → OpenAI]
+        RSC[response_converter.py<br/>OpenAI → Claude]
+        CL[client.py<br/>AsyncOpenAI + Cancellation]
+        MM[model_manager.py<br/>Model Mapping]
+        CF[config.py<br/>Configuration]
+    end
+
+    subgraph Providers
+        OAI[OpenAI<br/>GPT-4o, o3, o4]
+        OR[OpenRouter<br/>100+ models]
+        DS[DeepSeek]
+        AZ[Azure OpenAI]
+        OL[Ollama / Local]
+    end
+
+    CC -->|Anthropic format| EP
+    AC -->|Anthropic format| EP
+    EP --> RC
+    RC --> MM
+    RC --> CL
+    CL --> OAI
+    CL --> OR
+    CL --> DS
+    CL --> AZ
+    CL --> OL
+    OAI --> RSC
+    OR --> RSC
+    DS --> RSC
+    AZ --> RSC
+    OL --> RSC
+    RSC -->|SSE Stream| EP
+    EP -->|Anthropic format| CC
+
+    style EP fill:#009688,color:#fff
+    style RC fill:#2196F3,color:#fff
+    style RSC fill:#2196F3,color:#fff
+    style CL fill:#FF9800,color:#fff
+    style MM fill:#9C27B0,color:#fff
+    style CF fill:#607D8B,color:#fff
+```
+
+### Streaming Event Flow
+
+```mermaid
+graph LR
+    A[message_start] --> B[content_block_start<br/>thinking]
+    B --> C[thinking_delta ...]
+    C --> D[content_block_stop]
+    D --> E[content_block_start<br/>text]
+    E --> F[text_delta ...]
+    F --> G[content_block_stop]
+    G --> H[content_block_start<br/>tool_use]
+    H --> I[input_json_delta ...]
+    I --> J[content_block_stop]
+    J --> K[message_delta<br/>stop_reason + usage]
+    K --> L[message_stop]
+
+    style A fill:#4CAF50,color:#fff
+    style B fill:#9C27B0,color:#fff
+    style E fill:#2196F3,color:#fff
+    style H fill:#FF9800,color:#fff
+    style K fill:#f44336,color:#fff
+    style L fill:#f44336,color:#fff
+```
+
+The proxy handles streaming and non-streaming responses, tool calls, system prompts, multi-turn conversations,
 images, and reasoning/thinking blocks.
 
 <br>
