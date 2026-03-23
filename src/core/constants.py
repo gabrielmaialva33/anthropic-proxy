@@ -1,4 +1,4 @@
-# Constants for better maintainability  
+# Constants for better maintainability
 class Constants:
     ROLE_USER = "user"
     ROLE_ASSISTANT = "assistant"
@@ -9,6 +9,7 @@ class Constants:
     CONTENT_IMAGE = "image"
     CONTENT_TOOL_USE = "tool_use"
     CONTENT_TOOL_RESULT = "tool_result"
+    CONTENT_THINKING = "thinking"
 
     TOOL_FUNCTION = "function"
 
@@ -27,3 +28,7 @@ class Constants:
 
     DELTA_TEXT = "text_delta"
     DELTA_INPUT_JSON = "input_json_delta"
+    DELTA_THINKING = "thinking_delta"
+
+    # Claude-specific fields to strip when forwarding to non-Claude providers
+    CLAUDE_ONLY_FIELDS = {"thinking", "cache_control"}
