@@ -6,16 +6,17 @@
 </table>
 
 <p align="center">
-  <strong>A proxy that lets you use Claude Code with OpenAI models like GPT-4o.</strong>
+  <strong>A proxy that lets you use Claude Code with any OpenAI-compatible model — GPT-4o, DeepSeek, OpenRouter, Ollama, and more.</strong>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/github/license/gabrielmaialva33/anthropic-proxy?color=00b8d3?style=flat&logo=appveyor" alt="License" />
   <img src="https://img.shields.io/badge/Python-3.10+-blue.svg?style=flat&logo=python" alt="Python" >
-  <img src="https://img.shields.io/badge/FastAPI-0.115.11-009688.svg?style=flat&logo=fastapi" alt="FastAPI" >
+  <img src="https://img.shields.io/badge/FastAPI-latest-009688.svg?style=flat&logo=fastapi" alt="FastAPI" >
   <img src="https://img.shields.io/badge/OpenAI-API-412991.svg?style=flat&logo=openai" alt="OpenAI" >
+  <img src="https://img.shields.io/badge/OpenRouter-supported-7C3AED.svg?style=flat" alt="OpenRouter" >
   <img src="https://img.shields.io/badge/Claude-Code-5A67D8?style=flat&logo=anthropic" alt="Claude Code" >
-  <img src="https://img.shields.io/badge/made%20by-Maia-15c3d6?style=flat&logo=appveyor" alt="Maia" >  
+  <img src="https://img.shields.io/badge/made%20by-Maia-15c3d6?style=flat&logo=appveyor" alt="Maia" >
 </p>
 
 <br>
@@ -26,7 +27,7 @@
   <a href="#package-installation">Installation</a>&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
   <a href="#rocket-usage">Usage</a>&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
   <a href="#gear-how-it-works">How it Works</a>&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
-  <a href="#camera-screenshots">Screenshots</a>&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
+  <a href="#globe_with_meridians-providers">Providers</a>&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
   <a href="#memo-license">License</a>
 </p>
 
@@ -34,20 +35,32 @@
 
 ## :bookmark: About
 
-**Claude on OpenAI** is a proxy server that lets you use Claude Code (Anthropic's CLI tool) with OpenAI models like
-GPT-4o and GPT-4o-mini. It translates between Anthropic's API format and OpenAI's API format, allowing you to leverage
-OpenAI's powerful models through Anthropic's interfaces.
+**Claude on OpenAI** is a proxy server that lets you use Claude Code (Anthropic's CLI tool) with any OpenAI-compatible
+API. It translates between Anthropic's API format and OpenAI's format on the fly — supporting GPT-4o, DeepSeek,
+OpenRouter (100+ models), Ollama, Azure OpenAI, and any other OpenAI-compatible provider.
+
+### :sparkles: Key Features
+
+- **Multi-provider support** — OpenAI, OpenRouter, DeepSeek, Azure, Ollama, NVIDIA NIM, and more
+- **Reasoning/thinking blocks** — o1/o3/o4 `reasoning_content` converted to Claude `thinking` blocks
+- **Streaming with tool calls** — Full SSE streaming with incremental tool call argument deltas
+- **Input sanitization** — Claude-only fields (`thinking`, `cache_control`) automatically stripped for non-Claude
+  providers
+- **Adaptive parameters** — Reasoning models get `max_completion_tokens`, others get `max_tokens`
+- **Accurate token counting** — Uses `tiktoken` instead of naive char estimation
+- **Client disconnection handling** — Cancels upstream requests when client drops
+- **Request cancellation** — Thread-safe cancellation with `asyncio.Lock`
 
 <br>
 
 ## :computer: Technologies
 
-- **[Python](https://python.org/)** - Core language
-- **[FastAPI](https://fastapi.tiangolo.com/)** - Web framework
-- **[LiteLLM](https://github.com/BerriAI/litellm)** - API translation layer
-- **[Pydantic](https://pydantic-docs.helpmanual.io/)** - Data validation
-- **[Uvicorn](https://www.uvicorn.org/)** - ASGI server
-- **[dotenv](https://pypi.org/project/python-dotenv/)** - Environment variable management
+- **[Python](https://python.org/)** — Core language
+- **[FastAPI](https://fastapi.tiangolo.com/)** — Web framework
+- **[OpenAI SDK](https://github.com/openai/openai-python)** — Direct async client (no LiteLLM dependency)
+- **[Pydantic](https://pydantic-docs.helpmanual.io/)** — Data validation
+- **[tiktoken](https://github.com/openai/tiktoken)** — Accurate token counting
+- **[Uvicorn](https://www.uvicorn.org/)** — ASGI server
 
 <br>
 
@@ -56,9 +69,8 @@ OpenAI's powerful models through Anthropic's interfaces.
 ### :gear: **Prerequisites**
 
 - **[Python](https://python.org/)** (3.10+)
-- **[uv](https://pypi.org/project/uv/)** or **[pip](https://pypi.org/project/pip/)** for package management
-- An **OpenAI API key**
-- Optionally, an **Anthropic API key** if you want to use Anthropic models too
+- **[uv](https://docs.astral.sh/uv/)** (recommended) or **pip**
+- An API key for your chosen provider
 
 <br>
 
@@ -75,7 +87,7 @@ cd anthropic-proxy
 
 ```sh
 # With uv (recommended)
-uv pip install -r requirements.txt
+uv venv && uv pip install -r requirements.txt
 
 # Or with pip
 pip install -r requirements.txt
@@ -85,25 +97,29 @@ pip install -r requirements.txt
 
 ### :key: **Configuration**
 
-Create a `.env` file with:
+Copy `.env.example` to `.env` and configure:
 
 ```env
-# API Keys (at least one is required)
-ANTHROPIC_API_KEY=your_anthropic_api_key_here  # Required for Anthropic models
-OPENAI_API_KEY=your_openai_api_key_here        # Required for OpenAI models
+# Required: API key for your provider
+OPENAI_API_KEY="sk-your-api-key"
 
-# Model Configuration
-BIG_MODEL=gpt-4o                  # OpenAI model to use for Claude Sonnet models
-SMALL_MODEL=gpt-4o-mini           # OpenAI model to use for Claude Haiku models
+# Optional: Base URL (default: https://api.openai.com/v1)
+OPENAI_BASE_URL="https://api.openai.com/v1"
 
-# Feature Flags
-USE_OPENAI_MODELS=True            # Set to False to use native Anthropic models instead
+# Optional: Model mapping
+BIG_MODEL="gpt-4o"            # Claude opus requests
+MIDDLE_MODEL="gpt-4o"         # Claude sonnet requests
+SMALL_MODEL="gpt-4o-mini"     # Claude haiku requests
 
-# Server Configuration
-SERVER_HOST=0.0.0.0
-SERVER_PORT=8082
-LOG_LEVEL=error                   # Options: debug, info, warning, error, critical
+# Optional: Client API key validation
+ANTHROPIC_API_KEY="expected-key-from-clients"
+
+# Optional: Performance
+MAX_TOKENS_LIMIT="16384"
+REQUEST_TIMEOUT="120"
 ```
+
+See [`.env.example`](.env.example) for all options including OpenRouter, DeepSeek, Azure, and Ollama examples.
 
 <br>
 
@@ -112,107 +128,129 @@ LOG_LEVEL=error                   # Options: debug, info, warning, error, critic
 ### :computer: **Starting the proxy server**
 
 ```sh
-# With Python
+# Standard mode
 python main.py
 
 # With uvicorn directly
-uvicorn src.app:app --host 0.0.0.0 --port 8082
+uvicorn src.main:app --host 0.0.0.0 --port 8082
+
+# With auto-reload for development
+uvicorn src.main:app --host 0.0.0.0 --port 8082 --reload
 ```
 
 <br>
 
-### :shell: **Installing & Using Claude Code**
+### :shell: **Using with Claude Code**
 
-Claude Code is Anthropic's command-line tool that helps you with coding tasks. To use it with our proxy:
+```sh
+# Point Claude Code at your proxy
+ANTHROPIC_BASE_URL=http://localhost:8082 claude
 
-1. **Install Node.js**:
-   Make sure you have Node.js installed (version 18 or higher). You can download it
-   from [nodejs.org](https://nodejs.org/).
+# Or export for the session
+export ANTHROPIC_BASE_URL=http://localhost:8082
+claude "Write a Python function that counts words"
+```
 
-2. **Install Claude Code globally**:
-   ```sh
-   npm install -g @anthropic-ai/claude-code
-   ```
+That's it! Claude Code will use your configured model through the proxy.
 
-3. **Verify installation**:
-   ```sh
-   claude --version
-   ```
+<br>
 
-   This should display the version number if Claude Code is correctly installed.
+### :wrench: **Troubleshooting**
 
-4. **Connect to your proxy**:
-   ```sh
-   ANTHROPIC_BASE_URL=http://localhost:8082 claude
-   ```
-
-5. **Start using Claude Code**:
-   ```sh
-   # For example, to start a new conversation:
-   claude "Write a Python function that counts words in a string"
-   
-   # Or to analyze a file:
-   claude analyze myfile.py
-   ```
-
-That's it! Your Claude Code client will now use OpenAI models through the proxy. You can use all Claude Code commands as
-normal, with the processing power of OpenAI models behind the scenes.
-
-### :wrench: **Troubleshooting Claude Code**
-
-If you encounter issues:
-
-- **Authentication errors**: Make sure your proxy is running and the `ANTHROPIC_BASE_URL` environment variable is set
-  correctly.
-
-- **"Command not found"**: Ensure Node.js is in your PATH and that Claude Code was installed globally with `-g` flag.
-
-- **Permission issues**: You might need to use `sudo` on Linux/Mac or run as Administrator on Windows.
-
-- **Connection refused**: Check that the proxy server is running on the expected port (8082 by default).
-
-For more information on Claude Code,
-visit [Anthropic's documentation](https://docs.anthropic.com/claude/docs/claude-code).
+- **Connection refused** — Check the proxy is running on port 8082
+- **Authentication errors** — Verify your `OPENAI_API_KEY` is correct
+- **Model not found** — Check your `BIG_MODEL`/`SMALL_MODEL` values match your provider
+- **Max token errors** — Increase `MAX_TOKENS_LIMIT` in `.env`
 
 <br>
 
 ## :gear: How it Works
 
-This proxy operates by:
+```
+Claude Code ──► Anthropic format ──► Proxy ──► OpenAI format ──► Provider
+                                       │
+                                       ├── Convert request (tools, messages, system)
+                                       ├── Map model (haiku→small, sonnet→middle, opus→big)
+                                       ├── Sanitize input (strip thinking/cache_control)
+                                       ├── Adapt params (max_tokens vs max_completion_tokens)
+                                       │
+Provider ──► OpenAI format ──► Proxy ──► Anthropic format ──► Claude Code
+                                 │
+                                 ├── Convert response (tool_calls → tool_use blocks)
+                                 ├── Convert reasoning → thinking blocks
+                                 └── Stream SSE events (message_start → deltas → message_stop)
+```
 
-1. **Receiving requests** in Anthropic's API format
-2. **Translating** the requests to OpenAI format using LiteLLM
-3. **Sending** the translated request to OpenAI
-4. **Converting** the response back to Anthropic format
-5. **Returning** the formatted response to the client
-
-The proxy handles both streaming and non-streaming responses, tool calls, system prompts, and multi-turn conversations
-to maintain compatibility with all Claude clients.
+The proxy handles both streaming and non-streaming responses, tool calls, system prompts, multi-turn conversations,
+images, and reasoning/thinking blocks.
 
 <br>
 
-## :camera: Screenshots
+## :globe_with_meridians: Providers
 
-<p align="center">
-  <img src="assets/pic_screen.png" alt="Claude Code in action" width="800">
-  <br>
-  <em>Claude Code in action, running with OpenAI models through the proxy</em>
-</p>
+### OpenAI (default)
+
+```env
+OPENAI_API_KEY="sk-..."
+BIG_MODEL="gpt-4o"
+SMALL_MODEL="gpt-4o-mini"
+```
+
+### OpenRouter (100+ models)
+
+```env
+OPENAI_API_KEY="sk-or-v1-..."
+OPENAI_BASE_URL="https://openrouter.ai/api/v1"
+BIG_MODEL="anthropic/claude-3.5-sonnet"
+SMALL_MODEL="meta-llama/llama-3.1-8b-instruct:free"
+```
+
+### DeepSeek
+
+```env
+OPENAI_API_KEY="sk-..."
+OPENAI_BASE_URL="https://api.deepseek.com/v1"
+BIG_MODEL="deepseek-chat"
+SMALL_MODEL="deepseek-chat"
+```
+
+### Azure OpenAI
+
+```env
+OPENAI_API_KEY="your-azure-key"
+OPENAI_BASE_URL="https://your-resource.openai.azure.com/openai/deployments/your-deployment"
+AZURE_API_VERSION="2024-03-01-preview"
+```
+
+### Ollama / Local Models
+
+```env
+OPENAI_API_KEY="not-needed"
+OPENAI_BASE_URL="http://localhost:11434/v1"
+BIG_MODEL="llama3.1:70b"
+SMALL_MODEL="llama3.1:8b"
+```
+
+### OpenAI Reasoning Models (o1/o3/o4)
+
+```env
+BIG_MODEL="o3-mini"
+SMALL_MODEL="o4-mini"
+# Automatically uses max_completion_tokens and converts thinking blocks
+```
 
 <br>
 
 ### :world_map: Model Mapping
 
-The proxy automatically maps Claude models to OpenAI models:
+| Claude Model | Maps to         | Config          |
+|--------------|-----------------|-----------------|
+| haiku        | gpt-4o-mini     | `SMALL_MODEL`   |
+| sonnet       | gpt-4o          | `MIDDLE_MODEL`  |
+| opus         | gpt-4o          | `BIG_MODEL`     |
+| (other)      | passthrough     | —               |
 
-| Claude Model | OpenAI Model          |
-|--------------|-----------------------|
-| haiku        | gpt-4o-mini (default) |
-| sonnet       | gpt-4o (default)      |
-
-<br>
-
-You can customize which OpenAI models are used via the `BIG_MODEL` and `SMALL_MODEL` environment variables.
+Models with provider prefixes (`meta/`, `google/`, `openrouter/`, etc.) are passed through without remapping.
 
 <br>
 
