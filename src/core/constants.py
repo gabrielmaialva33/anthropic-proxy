@@ -32,3 +32,37 @@ class Constants:
 
     # Claude-specific fields to strip when forwarding to non-Claude providers
     CLAUDE_ONLY_FIELDS = {"thinking", "cache_control"}
+
+    # JSON Schema fields unsupported by Google Gemini
+    GEMINI_UNSUPPORTED_SCHEMA_FIELDS = {
+        "additionalProperties",
+        "$schema",
+        "$ref",
+        "$id",
+        "oneOf",
+        "anyOf",
+        "allOf",
+        "not",
+        "nullable",
+        "discriminator",
+        "readOnly",
+        "writeOnly",
+        "xml",
+        "externalDocs",
+        "example",
+        "examples",
+        "deprecated",
+        "pattern",
+        "patternProperties",
+        "minProperties",
+        "maxProperties",
+        "if",
+        "then",
+        "else",
+        "dependentRequired",
+        "dependentSchemas",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+        "contentMediaType",
+        "contentEncoding",
+    }

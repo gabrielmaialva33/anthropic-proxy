@@ -9,6 +9,39 @@ from src.models.claude import ClaudeMessagesRequest, ClaudeMessage
 logger = logging.getLogger(__name__)
 
 
+def _clean_schema_for_gemini(schema: dict) -> dict:
+    """Recursively remove JSON Schema fields unsupported by Google Gemini."""
+    if not isinstance(schema, dict):
+        return schema
+
+    cleaned: Dict[str, Any] = {}
+    for key, value in schema.items():
+        if key in Constants.GEMINI_UNSUPPORTED_SCHEMA_FIELDS:
+            continue
+
+        if key in ("properties", "patternProperties") and isinstance(value, dict):
+            cleaned[key] = {k: _clean_schema_for_gemini(v) for k, v in value.items()}
+        elif key == "items":
+            if isinstance(value, dict):
+                cleaned[key] = _clean_schema_for_gemini(value)
+            elif isinstance(value, list):
+                cleaned[key] = [_clean_schema_for_gemini(v) for v in value]
+            else:
+                cleaned[key] = value
+        elif key == "additionalItems" and isinstance(value, dict):
+            cleaned[key] = _clean_schema_for_gemini(value)
+        elif isinstance(value, dict):
+            cleaned[key] = _clean_schema_for_gemini(value)
+        elif isinstance(value, list):
+            cleaned[key] = [
+                _clean_schema_for_gemini(v) if isinstance(v, dict) else v for v in value
+            ]
+        else:
+            cleaned[key] = value
+
+    return cleaned
+
+
 def convert_claude_to_openai(
     claude_request: ClaudeMessagesRequest, model_manager
 ) -> Dict[str, Any]:
@@ -121,6 +154,19 @@ def convert_claude_to_openai(
                     }
                 )
         if openai_tools:
+            if config.is_gemini_provider():
+                openai_tools = [
+                    {
+                        **tool,
+                        Constants.TOOL_FUNCTION: {
+                            **tool[Constants.TOOL_FUNCTION],
+                            "parameters": _clean_schema_for_gemini(
+                                tool[Constants.TOOL_FUNCTION].get("parameters", {})
+                            ),
+                        },
+                    }
+                    for tool in openai_tools
+                ]
             openai_request["tools"] = openai_tools
 
     # Convert tool choice

@@ -29,6 +29,14 @@ class Config:
         self.max_tokens_limit = int(os.environ.get("MAX_TOKENS_LIMIT", "16384"))
         self.min_tokens_limit = int(os.environ.get("MIN_TOKENS_LIMIT", "100"))
 
+        # Anthropic passthrough settings
+        self.anthropic_base_url = os.environ.get(
+            "ANTHROPIC_BASE_URL", "https://api.anthropic.com"
+        )
+        self.enable_passthrough = (
+            os.environ.get("ENABLE_PASSTHROUGH", "true").lower() == "true"
+        )
+
         # Connection settings
         self.request_timeout = int(os.environ.get("REQUEST_TIMEOUT", "120"))
         self.max_retries = int(os.environ.get("MAX_RETRIES", "2"))
@@ -42,6 +50,13 @@ class Config:
         """Check if model uses reasoning/thinking (o1, o3, o4 series)."""
         model_lower = model.lower()
         return any(model_lower.startswith(p) for p in self.REASONING_MODEL_PREFIXES)
+
+    def is_gemini_provider(self) -> bool:
+        """Check if the configured provider is Google Gemini."""
+        return any(
+            x in self.openai_base_url.lower()
+            for x in ["googleapis", "generativelanguage", "gemini"]
+        )
 
     def validate_api_key(self):
         """Basic API key validation"""
