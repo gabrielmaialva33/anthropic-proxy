@@ -82,12 +82,20 @@ The proxy supports any OpenAI-compatible provider via `OPENAI_BASE_URL`:
 - Claude models are mapped: `haiku` → `SMALL_MODEL`, `sonnet` → `MIDDLE_MODEL`, `opus` → `BIG_MODEL`
 - Unknown models default to `BIG_MODEL`
 
+**Anthropic passthrough**:
+
+- When `ANTHROPIC_API_KEY` and `ENABLE_PASSTHROUGH=true` are set, Claude model requests are forwarded directly to
+  Anthropic's API without conversion
+- Supports both streaming (SSE pipe) and non-streaming modes
+- API key extracted from client headers or falls back to configured key
+
 **Reasoning model support**:
 
 - Models starting with `o1`, `o3`, `o4` are detected as reasoning models
 - Use `max_completion_tokens` instead of `max_tokens`
 - `temperature` parameter is omitted (rejected by reasoning models)
 - `reasoning_content` in responses is converted to Claude `thinking` blocks
+- OpenRouter's `reasoning_details` array format is also supported
 
 ### Core Components
 
@@ -103,7 +111,8 @@ The proxy supports any OpenAI-compatible provider via `OPENAI_BASE_URL`:
 **`src/conversion/request_converter.py`**
 
 - `convert_claude_to_openai()` — Full request format conversion
-- Input sanitization: strips `thinking`/`cache_control` from messages
+- `_clean_schema_for_gemini()` — Recursively removes 28+ unsupported JSON Schema fields for Gemini
+- `_sanitize_messages()` — Strips `thinking`/`cache_control` from messages
 - Adaptive max_tokens: `max_completion_tokens` for reasoning models
 - Tool conversion: Claude tools → OpenAI function calling format
 - Tool choice mapping: `auto`→`auto`, `any`→`required`, `tool`→specific function
@@ -113,8 +122,10 @@ The proxy supports any OpenAI-compatible provider via `OPENAI_BASE_URL`:
 
 - `convert_openai_to_claude_response()` — Non-streaming response conversion
 - `convert_openai_streaming_to_claude()` — Streaming without cancellation
-- `convert_openai_streaming_to_claude_with_cancellation()` — Streaming with client disconnect detection
-- Reasoning/thinking block conversion from `reasoning_content`
+- `convert_openai_streaming_to_claude_with_cancellation()` — Streaming with client disconnect detection and throughput logging
+- `_extract_reasoning_details()` — Parses OpenRouter's `reasoning_details` array format
+- `_handle_streaming_reasoning()` — Shared helper for streaming thinking blocks
+- Reasoning/thinking block conversion from `reasoning_content` and `reasoning_details`
 - Incremental tool call argument streaming (sends each chunk as delta)
 - All content blocks guaranteed closed to prevent client hangs
 
@@ -130,8 +141,10 @@ The proxy supports any OpenAI-compatible provider via `OPENAI_BASE_URL`:
 
 - `Config` — Centralized configuration from environment
 - `is_reasoning_model()` — Detects o1/o3/o4 series
+- `is_gemini_provider()` — Auto-detects Gemini from base URL
 - `validate_client_api_key()` — Optional client auth
 - `get_custom_headers()` — Dynamic header injection
+- `anthropic_base_url` / `enable_passthrough` — Anthropic passthrough config
 
 **`src/core/model_manager.py`**
 
@@ -142,6 +155,7 @@ The proxy supports any OpenAI-compatible provider via `OPENAI_BASE_URL`:
 
 - All string constants for roles, content types, events, deltas
 - `CLAUDE_ONLY_FIELDS` — Fields to strip from non-Claude provider requests
+- `GEMINI_UNSUPPORTED_SCHEMA_FIELDS` — 28+ JSON Schema fields Gemini rejects
 
 **`src/models/claude.py`**
 
@@ -192,6 +206,18 @@ Optional:
 - `MIN_TOKENS_LIMIT` — Min output tokens (default: `100`)
 - `REQUEST_TIMEOUT` — Request timeout in seconds (default: `120`)
 - `CUSTOM_HEADER_*` — Custom headers (underscores become hyphens)
+- `ANTHROPIC_BASE_URL` — Anthropic API base URL for passthrough (default: `https://api.anthropic.com`)
+- `ENABLE_PASSTHROUGH` — Forward Claude models to Anthropic directly (default: `true`)
+
+### Docker
+
+```bash
+# Build and run
+docker compose up -d
+
+# Custom port
+PORT=9090 docker compose up -d
+```
 
 ## Common Patterns
 
@@ -223,7 +249,11 @@ Set `LOG_LEVEL=debug` in `.env`. Check that:
 
 - **No LiteLLM dependency** — Uses OpenAI Python SDK directly for fewer moving parts
 - **Input sanitization** — Claude-only fields (`thinking`, `cache_control`) are stripped before forwarding
+- **Gemini compatibility** — 28+ unsupported JSON Schema fields auto-cleaned from tool parameters
+- **Anthropic passthrough** — Claude model requests forwarded directly when passthrough is enabled
 - **Reasoning models** — o1/o3/o4 automatically get `max_completion_tokens` and thinking block conversion
+- **OpenRouter reasoning_details** — Array format from OpenRouter converted alongside standard `reasoning_content`
+- **Throughput logging** — tok/s metrics logged for both streaming and non-streaming responses
 - **Token counting** — Uses tiktoken (cl100k_base) for accurate counts, falls back to estimation
 - **Tool call IDs** — Generated using UUID if not provided by the LLM
 - **Error handling** — All errors are converted to Anthropic format with proper `error` objects
