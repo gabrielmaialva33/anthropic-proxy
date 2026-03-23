@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 import uuid
 
 from fastapi import HTTPException, Request
@@ -8,6 +9,19 @@ from src.core.constants import Constants
 from src.models.claude import ClaudeMessagesRequest
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_reasoning_details(details: list) -> str:
+    """Extract reasoning text from OpenRouter's reasoning_details array format."""
+    parts = []
+    for item in details:
+        if (
+            isinstance(item, dict)
+            and item.get("type") == "reasoning"
+            and item.get("text")
+        ):
+            parts.append(item["text"])
+    return "".join(parts)
 
 
 def convert_openai_to_claude_response(
@@ -28,6 +42,13 @@ def convert_openai_to_claude_response(
 
     # Add reasoning/thinking content if present (o1/o3/o4 models)
     reasoning = message.get("reasoning_content") or message.get("reasoning")
+
+    # Also check OpenRouter's reasoning_details array format
+    if not reasoning:
+        reasoning_details = message.get("reasoning_details")
+        if isinstance(reasoning_details, list) and reasoning_details:
+            reasoning = _extract_reasoning_details(reasoning_details)
+
     if reasoning:
         content_blocks.append(
             {
@@ -93,6 +114,47 @@ def convert_openai_to_claude_response(
     return claude_response
 
 
+def _handle_streaming_reasoning(
+    delta, has_thinking, thinking_block_index, text_block_index
+):
+    """Handle reasoning/thinking deltas from streaming chunks. Returns (events, reasoning_text, has_thinking, thinking_block_index, text_block_index)."""
+    events = []
+    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+
+    # Check OpenRouter's reasoning_details array in delta
+    if not reasoning:
+        reasoning_details = delta.get("reasoning_details")
+        if isinstance(reasoning_details, list):
+            parts = []
+            for item in reasoning_details:
+                if (
+                    isinstance(item, dict)
+                    and item.get("type") == "reasoning"
+                    and item.get("text")
+                ):
+                    parts.append(item["text"])
+            if parts:
+                reasoning = "".join(parts)
+
+    if reasoning:
+        if not has_thinking:
+            has_thinking = True
+            thinking_block_index = 0
+            text_block_index = 1
+            # Re-emit block 0 as thinking instead of text
+            events.append(
+                f"event: {Constants.EVENT_CONTENT_BLOCK_STOP}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_STOP, 'index': 0}, ensure_ascii=False)}\n\n"
+            )
+            events.append(
+                f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': thinking_block_index, 'content_block': {'type': Constants.CONTENT_THINKING, 'thinking': ''}}, ensure_ascii=False)}\n\n"
+            )
+        events.append(
+            f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': thinking_block_index, 'delta': {'type': Constants.DELTA_THINKING, 'thinking': reasoning}}, ensure_ascii=False)}\n\n"
+        )
+
+    return events, has_thinking, thinking_block_index, text_block_index
+
+
 async def convert_openai_streaming_to_claude(
     openai_stream, original_request: ClaudeMessagesRequest, logger
 ):
@@ -138,17 +200,17 @@ async def convert_openai_streaming_to_claude(
                     delta = choice.get("delta", {})
                     finish_reason = choice.get("finish_reason")
 
-                    # Handle reasoning/thinking delta (o1/o3/o4 models)
-                    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
-                    if reasoning:
-                        if not has_thinking:
-                            has_thinking = True
-                            thinking_block_index = 0
-                            text_block_index = 1
-                            # Re-emit block 0 as thinking instead of text
-                            yield f"event: {Constants.EVENT_CONTENT_BLOCK_STOP}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_STOP, 'index': 0}, ensure_ascii=False)}\n\n"
-                            yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': thinking_block_index, 'content_block': {'type': Constants.CONTENT_THINKING, 'thinking': ''}}, ensure_ascii=False)}\n\n"
-                        yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': thinking_block_index, 'delta': {'type': Constants.DELTA_THINKING, 'thinking': reasoning}}, ensure_ascii=False)}\n\n"
+                    # Handle reasoning/thinking delta (o1/o3/o4 models + OpenRouter)
+                    (
+                        reasoning_events,
+                        has_thinking,
+                        thinking_block_index,
+                        text_block_index,
+                    ) = _handle_streaming_reasoning(
+                        delta, has_thinking, thinking_block_index, text_block_index
+                    )
+                    for event in reasoning_events:
+                        yield event
 
                     # Handle text delta
                     if delta and "content" in delta and delta["content"] is not None:
@@ -257,6 +319,7 @@ async def convert_openai_streaming_to_claude_with_cancellation(
     http_request: Request,
     openai_client,
     request_id: str,
+    start_time: float | None = None,
 ):
     """Convert OpenAI streaming response to Claude streaming format with cancellation support."""
 
@@ -321,16 +384,17 @@ async def convert_openai_streaming_to_claude_with_cancellation(
                     delta = choice.get("delta", {})
                     finish_reason = choice.get("finish_reason")
 
-                    # Handle reasoning/thinking delta (o1/o3/o4 models)
-                    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
-                    if reasoning:
-                        if not has_thinking:
-                            has_thinking = True
-                            thinking_block_index = 0
-                            text_block_index = 1
-                            yield f"event: {Constants.EVENT_CONTENT_BLOCK_STOP}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_STOP, 'index': 0}, ensure_ascii=False)}\n\n"
-                            yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': thinking_block_index, 'content_block': {'type': Constants.CONTENT_THINKING, 'thinking': ''}}, ensure_ascii=False)}\n\n"
-                        yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': thinking_block_index, 'delta': {'type': Constants.DELTA_THINKING, 'thinking': reasoning}}, ensure_ascii=False)}\n\n"
+                    # Handle reasoning/thinking delta (o1/o3/o4 models + OpenRouter)
+                    (
+                        reasoning_events,
+                        has_thinking,
+                        thinking_block_index,
+                        text_block_index,
+                    ) = _handle_streaming_reasoning(
+                        delta, has_thinking, thinking_block_index, text_block_index
+                    )
+                    for event in reasoning_events:
+                        yield event
 
                     # Handle text delta
                     if delta and "content" in delta and delta["content"] is not None:
@@ -442,3 +506,13 @@ async def convert_openai_streaming_to_claude_with_cancellation(
 
     yield f"event: {Constants.EVENT_MESSAGE_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_DELTA, 'delta': {'stop_reason': final_stop_reason, 'stop_sequence': None}, 'usage': usage_data}, ensure_ascii=False)}\n\n"
     yield f"event: {Constants.EVENT_MESSAGE_STOP}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_STOP}, ensure_ascii=False)}\n\n"
+
+    # Log throughput for streaming
+    if start_time is not None:
+        elapsed = time.monotonic() - start_time
+        output_tokens = usage_data.get("output_tokens", 0)
+        tok_s = output_tokens / elapsed if elapsed > 0 else 0
+        model = original_request.model
+        logger.info(
+            f"Request completed: model={model}, {output_tokens} tokens in {elapsed:.1f}s ({tok_s:.1f} tok/s)"
+        )
