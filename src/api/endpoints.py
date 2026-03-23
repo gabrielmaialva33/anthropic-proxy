@@ -1,7 +1,9 @@
+import time
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import AsyncIterator, Optional
 
+import httpx
 import tiktoken
 from fastapi import APIRouter, HTTPException, Request, Header, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -62,6 +64,112 @@ async def validate_api_key(
         )
 
 
+def _get_passthrough_api_key(http_request: Request) -> str:
+    """Extract the API key from the request headers, falling back to config."""
+    api_key = http_request.headers.get("x-api-key")
+    if not api_key:
+        auth = http_request.headers.get("authorization", "")
+        if auth.startswith("Bearer "):
+            api_key = auth.removeprefix("Bearer ")
+    # Fall back to configured key (may be the same if client sends the env key)
+    return api_key or config.anthropic_api_key
+
+
+async def _handle_passthrough(
+    request: ClaudeMessagesRequest,
+    http_request: Request,
+) -> StreamingResponse | JSONResponse:
+    """Forward a Claude request directly to Anthropic's API without conversion."""
+    api_key = _get_passthrough_api_key(http_request)
+    url = f"{config.anthropic_base_url}/v1/messages"
+
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+
+    body = request.model_dump(exclude_none=True)
+
+    logger.info(
+        f"Passthrough → Anthropic: model={request.model}, stream={request.stream}"
+    )
+
+    try:
+        if request.stream:
+            # Streaming: keep the connection open and pipe SSE events back
+            client = httpx.AsyncClient(timeout=httpx.Timeout(config.request_timeout))
+            upstream = await client.send(
+                client.build_request("POST", url, json=body, headers=headers),
+                stream=True,
+            )
+
+            if upstream.status_code != 200:
+                resp_body = await upstream.aread()
+                await upstream.aclose()
+                await client.aclose()
+                logger.error(
+                    f"Passthrough upstream error {upstream.status_code}: {resp_body.decode()}"
+                )
+                return JSONResponse(
+                    status_code=upstream.status_code,
+                    content={
+                        "type": "error",
+                        "error": {
+                            "type": "api_error",
+                            "message": resp_body.decode(),
+                        },
+                    },
+                )
+
+            async def _streaming_generator() -> AsyncIterator[bytes]:
+                try:
+                    async for chunk in upstream.aiter_bytes():
+                        yield chunk
+                except httpx.RemoteProtocolError:
+                    pass
+                finally:
+                    await upstream.aclose()
+                    await client.aclose()
+
+            return StreamingResponse(
+                _streaming_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "*",
+                },
+            )
+        else:
+            # Non-streaming: simple request/response
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(config.request_timeout)
+            ) as client:
+                upstream = await client.post(url, json=body, headers=headers)
+
+            if upstream.status_code != 200:
+                logger.error(
+                    f"Passthrough upstream error {upstream.status_code}: {upstream.text}"
+                )
+                return JSONResponse(
+                    status_code=upstream.status_code,
+                    content=upstream.json(),
+                )
+
+            return JSONResponse(content=upstream.json())
+
+    except httpx.TimeoutException:
+        logger.error("Passthrough request timed out")
+        raise HTTPException(
+            status_code=504, detail="Upstream Anthropic request timed out"
+        )
+    except httpx.HTTPError as exc:
+        logger.error(f"Passthrough HTTP error: {exc}")
+        raise HTTPException(status_code=502, detail=f"Upstream Anthropic error: {exc}")
+
+
 @router.post("/v1/messages")
 async def create_message(
     request: ClaudeMessagesRequest,
@@ -69,9 +177,19 @@ async def create_message(
     _: None = Depends(validate_api_key),
 ):
     try:
+        start_time = time.monotonic()
+
         logger.debug(
             f"Processing Claude request: model={request.model}, stream={request.stream}"
         )
+
+        # Anthropic passthrough: forward Claude model requests directly to Anthropic API
+        if (
+            config.anthropic_api_key
+            and config.enable_passthrough
+            and "claude" in request.model.lower()
+        ):
+            return await _handle_passthrough(request, http_request)
 
         # Generate unique request ID for cancellation tracking
         request_id = str(uuid.uuid4())
@@ -97,6 +215,7 @@ async def create_message(
                         http_request,
                         openai_client,
                         request_id,
+                        start_time=start_time,
                     ),
                     media_type="text/event-stream",
                     headers={
@@ -126,6 +245,16 @@ async def create_message(
             claude_response = convert_openai_to_claude_response(
                 openai_response, request
             )
+
+            # Log throughput
+            elapsed = time.monotonic() - start_time
+            output_tokens = claude_response.get("usage", {}).get("output_tokens", 0)
+            tok_s = output_tokens / elapsed if elapsed > 0 else 0
+            model = request.model
+            logger.info(
+                f"Request completed: model={model}, {output_tokens} tokens in {elapsed:.1f}s ({tok_s:.1f} tok/s)"
+            )
+
             return claude_response
     except HTTPException:
         raise
