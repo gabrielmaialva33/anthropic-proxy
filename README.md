@@ -50,6 +50,10 @@ OpenRouter (100+ models), Ollama, Azure OpenAI, and any other OpenAI-compatible 
 - **Accurate token counting** — Uses `tiktoken` instead of naive char estimation
 - **Client disconnection handling** — Cancels upstream requests when client drops
 - **Request cancellation** — Thread-safe cancellation with `asyncio.Lock`
+- **Anthropic passthrough** — Claude model requests forwarded directly to Anthropic API
+- **Gemini compatibility** — Auto-cleans 28+ unsupported JSON Schema fields
+- **Throughput logging** — Real-time tok/s metrics for both streaming and non-streaming
+- **Docker ready** — Single-command deployment with Docker Compose
 
 <br>
 
@@ -338,6 +342,47 @@ SMALL_MODEL="o4-mini"
 | (other)      | passthrough     | —               |
 
 Models with provider prefixes (`meta/`, `google/`, `openrouter/`, etc.) are passed through without remapping.
+
+<br>
+
+## :whale: Docker
+
+```sh
+# Build and run
+docker compose up -d
+
+# Custom port
+PORT=9090 docker compose up -d
+
+# Build only
+docker build -t anthropic-proxy .
+docker run -p 8082:8082 --env-file .env anthropic-proxy
+```
+
+<br>
+
+## :trophy: Feature Comparison
+
+How does **Claude on OpenAI** compare to other Claude-to-OpenAI proxy projects?
+
+| Feature | Claude on OpenAI | [1rgs](https://github.com/1rgs/claude-code-openai) | [fuergaosi233](https://github.com/fuergaosi233/anthropic-openai-proxy) | [9j/mux](https://github.com/9j/mux) |
+|---------|:---:|:---:|:---:|:---:|
+| **SSE Streaming** | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: |
+| **Tool Calls** | :white_check_mark: | :white_check_mark: | :x: | :white_check_mark: |
+| **Reasoning/Thinking Blocks** | :white_check_mark: | :x: | :x: | :x: |
+| **OpenRouter reasoning_details** | :white_check_mark: | :x: | :x: | :x: |
+| **Multi-Provider** (OpenAI, DeepSeek, Azure, Ollama) | :white_check_mark: | :x: | :x: | :white_check_mark: |
+| **Anthropic Passthrough** | :white_check_mark: | :x: | :x: | :x: |
+| **Gemini Schema Cleaning** | :white_check_mark: | :x: | :x: | :x: |
+| **Input Sanitization** (thinking/cache_control) | :white_check_mark: | :x: | :x: | :x: |
+| **Adaptive max_tokens** (reasoning models) | :white_check_mark: | :x: | :x: | :x: |
+| **Client Disconnect Cancellation** | :white_check_mark: | :x: | :x: | :x: |
+| **Thread-safe Request Tracking** | :white_check_mark: | :x: | :x: | :x: |
+| **Throughput Logging** (tok/s) | :white_check_mark: | :x: | :x: | :x: |
+| **Token Counting** (tiktoken) | :white_check_mark: | :x: | :x: | :x: |
+| **Docker Support** | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: |
+| **No LiteLLM Dependency** | :white_check_mark: | :x: | N/A | :white_check_mark: |
+| **Incremental Tool Arg Deltas** | :white_check_mark: | :x: | :x: | :x: |
 
 <br>
 
